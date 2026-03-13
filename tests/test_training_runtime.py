@@ -111,8 +111,15 @@ def test_run_experiment_smoke(tmp_path: Path):
     assert (result.output_dir / "config.yaml").exists()
     assert (result.output_dir / "summary.json").exists()
     assert (result.output_dir / "history.jsonl").exists()
+    assert (result.output_dir / "run_metadata.json").exists()
     assert (result.output_dir / "checkpoints" / "best").exists()
     assert (result.output_dir / "checkpoints" / "latest").exists()
+    run_metadata = loads((result.output_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert run_metadata["status"] == "completed"
+    assert run_metadata["mode"] == "train"
+    assert run_metadata["ended_at"] is not None
+    assert run_metadata["jax"]["device_count"] >= 1
+    assert "hostname" in run_metadata
 
 
 @pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")
@@ -154,6 +161,14 @@ def test_run_experiment_eval_only_from_run_directory(tmp_path: Path):
     assert eval_result.mode == "eval_only"
     assert eval_result.output_dir != train_result.output_dir
     assert (eval_result.output_dir / "summary.json").exists()
+    assert (eval_result.output_dir / "run_metadata.json").exists()
     summary = loads((eval_result.output_dir / "summary.json").read_text(encoding="utf-8"))
+    run_metadata = loads(
+        (eval_result.output_dir / "run_metadata.json").read_text(encoding="utf-8")
+    )
     assert summary["mode"] == "eval_only"
     assert summary["restored_step"] == 2
+    assert summary["duration_seconds"] >= 0.0
+    assert run_metadata["mode"] == "eval_only"
+    assert run_metadata["restored_checkpoint"].endswith("/checkpoints/best")
+    assert run_metadata["status"] == "completed"

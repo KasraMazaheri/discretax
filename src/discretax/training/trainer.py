@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,9 +24,15 @@ from discretax.training.io import (
     resolve_checkpoint_directory,
     save_checkpoint,
     write_resolved_config,
+    write_run_metadata,
     write_summary,
 )
 from discretax.training.logging import create_tracker
+from discretax.training.metadata import (
+    collect_run_metadata,
+    finalize_run_metadata,
+    tracker_runtime_summary,
+)
 from discretax.utils.param_count import count_params
 
 
@@ -379,6 +386,7 @@ def _log_static_summary(
     tracker: Any,
     dataset_bundle: DatasetBundle,
     model: eqx.nn.Sequential,
+    run_metadata: dict[str, Any],
 ) -> None:
     """Record static dataset and model metadata."""
     tracker.summary(
@@ -388,8 +396,46 @@ def _log_static_summary(
             "sequence_length": dataset_bundle.sequence_length,
             "num_classes": dataset_bundle.num_classes,
             "parameter_count": count_params(model),
+            **tracker_runtime_summary(run_metadata),
         }
     )
+
+
+def _write_completed_run_artifacts(
+    *,
+    output_dir: Path,
+    tracker: Any,
+    run_metadata: dict[str, Any],
+    summary: dict[str, Any],
+    final_step: int,
+    best_metric: float,
+) -> None:
+    """Write completion metadata and finalize the tracker."""
+    finalized_metadata = finalize_run_metadata(
+        run_metadata,
+        ended_at=datetime.now(UTC),
+        status="completed",
+        final_step=final_step,
+        best_metric=best_metric,
+    )
+    write_run_metadata(output_dir, finalized_metadata)
+    tracker.summary(
+        {
+            "run_status": finalized_metadata["status"],
+            "ended_at": finalized_metadata["ended_at"],
+            "duration_seconds": finalized_metadata["duration_seconds"],
+        }
+    )
+    write_summary(
+        output_dir,
+        {
+            **summary,
+            "started_at": run_metadata["started_at"],
+            "ended_at": finalized_metadata["ended_at"],
+            "duration_seconds": finalized_metadata["duration_seconds"],
+        },
+    )
+    tracker.finish()
 
 
 def _run_eval_only(
@@ -399,6 +445,7 @@ def _run_eval_only(
     runtime_state: _RuntimeState,
     output_dir: Path,
     tracker: Any,
+    run_metadata: dict[str, Any],
 ) -> RunResult:
     """Evaluate a restored checkpoint without further training."""
     if runtime_state.checkpoint_dir is None or runtime_state.resume_metadata is None:
@@ -418,16 +465,19 @@ def _run_eval_only(
             **test_metrics,
         }
     )
-    write_summary(
-        output_dir,
-        {
+    _write_completed_run_artifacts(
+        output_dir=output_dir,
+        tracker=tracker,
+        run_metadata=run_metadata,
+        summary={
             "mode": "eval_only",
             "restored_checkpoint": str(runtime_state.checkpoint_dir),
             "restored_step": runtime_state.final_step,
             **test_metrics,
         },
+        final_step=runtime_state.final_step,
+        best_metric=runtime_state.best_metric,
     )
-    tracker.finish()
     return RunResult(
         output_dir=output_dir,
         best_metric=runtime_state.best_metric,
@@ -548,6 +598,7 @@ def _finalize_training_run(
     runtime_state: _RuntimeState,
     output_dir: Path,
     tracker: Any,
+    run_metadata: dict[str, Any],
 ) -> RunResult:
     """Evaluate the best checkpoint on test data and write final outputs."""
     test_metrics = _evaluate(
@@ -565,16 +616,19 @@ def _finalize_training_run(
             "final_step": runtime_state.final_step,
         }
     )
-    write_summary(
-        output_dir,
-        {
+    _write_completed_run_artifacts(
+        output_dir=output_dir,
+        tracker=tracker,
+        run_metadata=run_metadata,
+        summary={
             "mode": "train",
             "best_metric": runtime_state.best_metric,
             "final_step": runtime_state.final_step,
             **test_metrics,
         },
+        final_step=runtime_state.final_step,
+        best_metric=runtime_state.best_metric,
     )
-    tracker.finish()
     return RunResult(
         output_dir=output_dir,
         best_metric=runtime_state.best_metric,
@@ -618,6 +672,13 @@ def run_experiment(
         checkpoint_dir=runtime_state.checkpoint_dir,
         eval_only=eval_only,
     )
+    run_metadata = collect_run_metadata(
+        output_dir=output_dir,
+        mode="eval_only" if eval_only else "train",
+        started_at=datetime.now(UTC),
+        resume_from=resume_from,
+        restored_checkpoint=runtime_state.checkpoint_dir,
+    )
 
     tracker = create_tracker(experiment_config, output_dir)
     _write_run_config(
@@ -626,92 +687,114 @@ def run_experiment(
         checkpoint_dir=runtime_state.checkpoint_dir,
         eval_only=eval_only,
     )
+    write_run_metadata(output_dir, run_metadata)
 
     train_step = _make_train_step(optimizer)
-    _log_static_summary(tracker, dataset_bundle, runtime_state.model)
+    _log_static_summary(tracker, dataset_bundle, runtime_state.model, run_metadata)
 
     validation_split_name = "validation" if len(dataset_bundle.validation) > 0 else "test"
 
-    if eval_only:
-        return _run_eval_only(
-            experiment_config,
-            dataset_bundle=dataset_bundle,
-            runtime_state=runtime_state,
-            output_dir=output_dir,
-            tracker=tracker,
-        )
-
-    for epoch in range(runtime_state.start_epoch, experiment_config.trainer.num_epochs):
-        epoch_seed = experiment_config.trainer.seed + epoch
-        epoch_batches = list(
-            batch_iterator(
-                dataset_bundle.train,
-                experiment_config.loader.batch_size,
-                shuffle=experiment_config.loader.shuffle_train,
-                drop_last=experiment_config.loader.drop_last_train,
-                seed=epoch_seed,
-            )
-        )
-        batch_start_index = (
-            runtime_state.steps_to_skip_in_epoch if epoch == runtime_state.start_epoch else 0
-        )
-        for batch_inputs, batch_targets in epoch_batches[batch_start_index:]:
-            runtime_state.steps_to_skip_in_epoch = 0
-            if runtime_state.final_step >= total_steps:
-                break
-
-            loop_key, step_key = jr.split(loop_key)
-            (
-                runtime_state.model,
-                runtime_state.state,
-                runtime_state.opt_state,
-                train_metrics,
-            ) = train_step(
-                runtime_state.model,
-                runtime_state.state,
-                runtime_state.opt_state,
-                batch_inputs,
-                batch_targets,
-                step_key,
-            )
-            runtime_state.final_step += 1
-
-            step_metrics = {
-                "epoch": epoch,
-                "step": runtime_state.final_step,
-                "learning_rate": float(learning_rate_schedule(runtime_state.final_step - 1)),
-                "train_loss": float(train_metrics["loss"]),
-                "train_accuracy": float(train_metrics["accuracy"]),
-            }
-
-            if runtime_state.final_step % experiment_config.trainer.log_every_steps == 0:
-                append_history(output_dir, step_metrics)
-                tracker.log(step_metrics, step=runtime_state.final_step)
-
-            _maybe_run_evaluation(
+    try:
+        if eval_only:
+            return _run_eval_only(
                 experiment_config,
                 dataset_bundle=dataset_bundle,
                 runtime_state=runtime_state,
                 output_dir=output_dir,
                 tracker=tracker,
-                epoch=epoch,
-                validation_split_name=validation_split_name,
-            )
-            _maybe_save_progress_checkpoint(
-                experiment_config,
-                dataset_bundle=dataset_bundle,
-                runtime_state=runtime_state,
-                output_dir=output_dir,
-                epoch=epoch,
+                run_metadata=run_metadata,
             )
 
-        if runtime_state.final_step >= total_steps:
-            break
+        for epoch in range(runtime_state.start_epoch, experiment_config.trainer.num_epochs):
+            epoch_seed = experiment_config.trainer.seed + epoch
+            epoch_batches = list(
+                batch_iterator(
+                    dataset_bundle.train,
+                    experiment_config.loader.batch_size,
+                    shuffle=experiment_config.loader.shuffle_train,
+                    drop_last=experiment_config.loader.drop_last_train,
+                    seed=epoch_seed,
+                )
+            )
+            batch_start_index = (
+                runtime_state.steps_to_skip_in_epoch if epoch == runtime_state.start_epoch else 0
+            )
+            for batch_inputs, batch_targets in epoch_batches[batch_start_index:]:
+                runtime_state.steps_to_skip_in_epoch = 0
+                if runtime_state.final_step >= total_steps:
+                    break
 
-    return _finalize_training_run(
-        experiment_config,
-        dataset_bundle=dataset_bundle,
-        runtime_state=runtime_state,
-        output_dir=output_dir,
-        tracker=tracker,
-    )
+                loop_key, step_key = jr.split(loop_key)
+                (
+                    runtime_state.model,
+                    runtime_state.state,
+                    runtime_state.opt_state,
+                    train_metrics,
+                ) = train_step(
+                    runtime_state.model,
+                    runtime_state.state,
+                    runtime_state.opt_state,
+                    batch_inputs,
+                    batch_targets,
+                    step_key,
+                )
+                runtime_state.final_step += 1
+
+                step_metrics = {
+                    "epoch": epoch,
+                    "step": runtime_state.final_step,
+                    "learning_rate": float(learning_rate_schedule(runtime_state.final_step - 1)),
+                    "train_loss": float(train_metrics["loss"]),
+                    "train_accuracy": float(train_metrics["accuracy"]),
+                }
+
+                if runtime_state.final_step % experiment_config.trainer.log_every_steps == 0:
+                    append_history(output_dir, step_metrics)
+                    tracker.log(step_metrics, step=runtime_state.final_step)
+
+                _maybe_run_evaluation(
+                    experiment_config,
+                    dataset_bundle=dataset_bundle,
+                    runtime_state=runtime_state,
+                    output_dir=output_dir,
+                    tracker=tracker,
+                    epoch=epoch,
+                    validation_split_name=validation_split_name,
+                )
+                _maybe_save_progress_checkpoint(
+                    experiment_config,
+                    dataset_bundle=dataset_bundle,
+                    runtime_state=runtime_state,
+                    output_dir=output_dir,
+                    epoch=epoch,
+                )
+
+            if runtime_state.final_step >= total_steps:
+                break
+
+        return _finalize_training_run(
+            experiment_config,
+            dataset_bundle=dataset_bundle,
+            runtime_state=runtime_state,
+            output_dir=output_dir,
+            tracker=tracker,
+            run_metadata=run_metadata,
+        )
+    except Exception as error:
+        write_run_metadata(
+            output_dir,
+            finalize_run_metadata(
+                run_metadata,
+                ended_at=datetime.now(UTC),
+                status="failed",
+                final_step=runtime_state.final_step,
+                best_metric=runtime_state.best_metric,
+                error={
+                    "type": type(error).__name__,
+                    "message": str(error),
+                },
+            ),
+        )
+        tracker.summary({"run_status": "failed"})
+        tracker.finish()
+        raise

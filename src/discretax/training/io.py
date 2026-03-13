@@ -53,6 +53,14 @@ def write_summary(output_dir: Path, summary: dict[str, Any]) -> Path:
     return summary_path
 
 
+def write_run_metadata(output_dir: Path, metadata: dict[str, Any]) -> Path:
+    """Write run metadata to disk."""
+    metadata_path = output_dir / "run_metadata.json"
+    with metadata_path.open("w", encoding="utf-8") as file:
+        json.dump(metadata, file, indent=2, sort_keys=True)
+    return metadata_path
+
+
 def resolve_checkpoint_directory(
     checkpoint_path: str | Path,
     *,

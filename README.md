@@ -130,7 +130,7 @@ The repository now includes a packaged training stack with:
 
 - hierarchical YAML experiment configs under `configs/`
 - dataset loaders for MNIST, CIFAR-10, and preprocessed UEA datasets
-- an Optax-based Equinox training runtime with checkpoints and JSONL history
+- an Optax-based Equinox training runtime with checkpoints, JSONL history, and run metadata
 - optional Weights & Biases logging with stable run naming and flattened config logging
 
 Helper scripts now live under `scripts/`:
@@ -176,6 +176,14 @@ uv run discretax-train \
   --resume-from outputs/20260313-025347-uea-eigenworms-linoss-sanity \
   --eval-only
 ```
+
+Each run directory now includes:
+
+- `config.yaml` with the fully resolved experiment config
+- `history.jsonl` with step and evaluation metrics
+- `summary.json` with final metrics and run timing
+- `run_metadata.json` with git state, host info, JAX backend, and visible devices
+- `checkpoints/` with `best`, `latest`, and periodic `step-*` snapshots
 
 UEA support expects the preprocessed split layout used in the sibling `linoss` repositories:
 
