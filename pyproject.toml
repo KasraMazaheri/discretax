@@ -49,6 +49,9 @@ dependencies = [
     "jaxtyping>=0.3.3",
 ]
 
+[project.scripts]
+discretax-train = "discretax.training.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pre-commit>=4.3.0",
@@ -56,6 +59,23 @@ dev = [
     "pandas>=2.3.2",
     "ipykernel>=6.30.1",
     "pytest>=8.3.3",
+    "optax>=0.2.6",
+    "pyyaml>=6.0.2",
+]
+
+train = [
+    "optax>=0.2.6",
+    "pyyaml>=6.0.2",
+    "torchvision>=0.24.0",
+    "torch>=2.6.0",
+    "wandb>=0.19.11",
+]
+
+data = [
+    "pandas>=2.3.2",
+    "scikit-learn>=1.7.2",
+    "sktime>=0.39.0",
+    "tqdm>=4.67.1",
 ]
 
 docs = [
@@ -70,6 +90,7 @@ docs = [
 examples = [
     "ipykernel>=7.0.1",
     "optax>=0.2.6",
+    "pyyaml>=6.0.2",
     "torchvision>=0.24.0",
     "torch>=2.6.0",
     "matplotlib>=3.10.0",

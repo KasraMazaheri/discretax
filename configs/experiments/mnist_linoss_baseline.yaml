@@ -1,0 +1,39 @@
+defaults:
+  - ../base
+  - ../datasets/mnist
+  - ../models/linoss
+
+name: mnist-linoss-baseline
+description: Baseline LinOSS training run on MNIST with offline W&B logging.
+tags:
+  - baseline
+  - mnist
+  - linoss
+loader:
+  batch_size: 128
+  eval_batch_size: 256
+optimizer:
+  name: adamw
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  grad_clip_norm: 1.0
+  schedule:
+    name: warmup_cosine_decay
+    warmup_steps: 10
+    decay_steps: 100
+    end_value: 0.0001
+trainer:
+  seed: 0
+  num_epochs: 1
+  max_steps: 100
+  log_every_steps: 10
+  eval_every_steps: 25
+  checkpoint_every_steps: 100
+wandb:
+  enabled: true
+  mode: offline
+  project: discretax-baselines
+  job_type: train
+  tags:
+    - baseline
+    - offline

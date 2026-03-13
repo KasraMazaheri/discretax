@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import jax.random as jr
 from jaxtyping import Array, PRNGKeyArray
 
@@ -34,6 +35,7 @@ class GLU(AbstractChannelMixer):
         *args,
         out_features: int | None = None,
         use_bias: bool = True,
+        dtype: jnp.dtype = jnp.float32,
         **kwargs,
     ):
         """Initialize the GLU layer.
@@ -43,14 +45,27 @@ class GLU(AbstractChannelMixer):
             key: JAX random key for initialization.
             out_features: optional dimensionality of the output features (defaults to in_features).
             use_bias: whether to include a bias term in the linear layers.
+            dtype: dtype for the linear projections.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
         w1_key, w2_key = jr.split(key, 2)
 
         out_features = out_features if out_features is not None else in_features
-        self.w1 = eqx.nn.Linear(in_features, out_features, use_bias=use_bias, key=w1_key)
-        self.w2 = eqx.nn.Linear(in_features, out_features, use_bias=use_bias, key=w2_key)
+        self.w1 = eqx.nn.Linear(
+            in_features,
+            out_features,
+            use_bias=use_bias,
+            dtype=dtype,
+            key=w1_key,
+        )
+        self.w2 = eqx.nn.Linear(
+            in_features,
+            out_features,
+            use_bias=use_bias,
+            dtype=dtype,
+            key=w2_key,
+        )
 
     def __call__(self, x: Array) -> Array:
         """Forward pass of the GLU layer.

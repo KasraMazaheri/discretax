@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 from jaxtyping import Array, PRNGKeyArray
 
 from discretax.encoder.base import AbstractEncoder
@@ -28,6 +29,7 @@ class LinearEncoder(AbstractEncoder):
         *args,
         out_features: int,
         use_bias: bool = False,
+        dtype: jnp.dtype = jnp.float32,
         **kwargs,
     ):
         """Initialize the linear encoder.
@@ -37,6 +39,7 @@ class LinearEncoder(AbstractEncoder):
             key: JAX random key for initialization.
             out_features: output dimensionality (hidden dimension).
             use_bias: whether to use bias in the linear layer.
+            dtype: dtype for the linear projection.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
@@ -45,6 +48,7 @@ class LinearEncoder(AbstractEncoder):
             out_features=out_features,
             key=key,
             use_bias=use_bias,
+            dtype=dtype,
         )
 
     def __call__(
@@ -62,5 +66,6 @@ class LinearEncoder(AbstractEncoder):
         Returns:
             Tuple containing the output tensor and updated state.
         """
+        x = x.astype(self.linear.weight.dtype)
         x = jax.vmap(self.linear)(x)
         return x, state

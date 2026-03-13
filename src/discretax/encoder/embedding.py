@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 from jaxtyping import Array, PRNGKeyArray
 
 from discretax.encoder.base import AbstractEncoder
@@ -27,6 +28,7 @@ class EmbeddingEncoder(AbstractEncoder):
         *args,
         out_features: int,
         num_classes: int,
+        dtype: jnp.dtype = jnp.float32,
         **kwargs,
     ):
         """Initialize the embedding encoder.
@@ -35,11 +37,15 @@ class EmbeddingEncoder(AbstractEncoder):
             key: JAX random key for initialization.
             out_features: output dimensionality (embedding dimension).
             num_classes: number of classes (vocabulary size).
+            dtype: dtype for the embedding table.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
         self.embedding = eqx.nn.Embedding(
-            num_embeddings=num_classes, embedding_size=out_features, key=key
+            num_embeddings=num_classes,
+            embedding_size=out_features,
+            dtype=dtype,
+            key=key,
         )
 
     def __call__(

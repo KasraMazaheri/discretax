@@ -1,0 +1,37 @@
+name: base-experiment
+description: Base experiment settings for Discretax training runs.
+tags: []
+paths:
+  data_root: data
+  output_root: outputs
+loader:
+  batch_size: 64
+  eval_batch_size: 128
+  shuffle_train: true
+  drop_last_train: false
+optimizer:
+  name: adamw
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  grad_clip_norm: 1.0
+  schedule:
+    name: constant
+trainer:
+  seed: 0
+  num_epochs: 5
+  max_steps:
+  log_every_steps: 10
+  eval_every_steps: 100
+  checkpoint_every_steps: 100
+  jit: true
+precision:
+  mode: float32
+checkpoint:
+  enabled: true
+  save_best: true
+  monitor: val_loss
+  mode: min
+wandb:
+  enabled: false
+  project: discretax
+  tags: []

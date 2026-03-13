@@ -1,0 +1,18 @@
+model:
+  name: linoss
+  hidden_dim: 64
+  encoder:
+    target: LinearEncoder
+    kwargs:
+      use_bias: false
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 4
+      state_dim: 64
+      drop_rate: 0.1
+      prenorm: true
+  head:
+    target: ClassificationHead
+    kwargs:
+      reduce: true

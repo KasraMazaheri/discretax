@@ -46,6 +46,7 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
     """
 
     blocks: list[StandardBlock]
+    compute_dtype: jnp.dtype = eqx.field(static=True)
 
     def __init__(
         self,
@@ -61,6 +62,7 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
         drop_rate: float = 0.1,
         prenorm: bool = True,
         use_bias: bool = True,
+        dtype: jnp.dtype = jnp.float32,
         **kwargs,
     ):
         """Initialize the LinOSS model.
@@ -77,10 +79,12 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
             drop_rate: dropout rate for blocks.
             prenorm: whether to apply prenorm in blocks.
             use_bias: whether to use bias in GLU channel mixers.
+            dtype: compute dtype for the LinOSS backbone.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
         keys = jr.split(key, 3 * num_blocks)
+        self.compute_dtype = jnp.dtype(dtype)
 
         # Build blocks with sequence mixers and channel mixers
         self.blocks = []
@@ -94,6 +98,7 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
                 damping=damping,
                 r_min=r_min,
                 theta_max=theta_max,
+                dtype=self.compute_dtype,
             )
 
             # Build channel mixer
@@ -102,6 +107,7 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
                 key=keys[num_blocks + i],
                 out_features=None,
                 use_bias=use_bias,
+                dtype=self.compute_dtype,
             )
 
             # Build block
@@ -112,6 +118,7 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
                 key=keys[2 * num_blocks + i],
                 drop_rate=drop_rate,
                 prenorm=prenorm,
+                dtype=self.compute_dtype,
             )
             self.blocks.append(block)
 
@@ -128,6 +135,9 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
         Returns:
             Tuple containing the output tensor and updated state.
         """
+        input_dtype = x.dtype
+        x = x.astype(self.compute_dtype)
+
         # Prepare the keys
         block_keys = jr.split(key, len(self.blocks))
 
@@ -135,7 +145,7 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
         for block, block_key in zip(self.blocks, block_keys):
             x, state = block(x, state, key=block_key)
 
-        return x, state
+        return x.astype(input_dtype), state
 
 
 if __name__ == "__main__":
