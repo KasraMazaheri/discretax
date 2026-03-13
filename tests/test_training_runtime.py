@@ -120,6 +120,13 @@ def test_run_experiment_smoke(tmp_path: Path):
     assert run_metadata["ended_at"] is not None
     assert run_metadata["jax"]["device_count"] >= 1
     assert "hostname" in run_metadata
+    history_records = [
+        loads(line)
+        for line in (result.output_dir / "history.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any("grad_norm" in record for record in history_records)
+    assert any("step_time_seconds" in record for record in history_records)
+    assert any("validation_duration_seconds" in record for record in history_records)
 
 
 @pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")

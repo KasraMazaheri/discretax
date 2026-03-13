@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import equinox as eqx
@@ -100,6 +101,13 @@ def _classification_metrics(
     return loss, accuracy
 
 
+def _safe_throughput(count: int, duration_seconds: float) -> float:
+    """Convert a work count and duration into a stable throughput metric."""
+    if duration_seconds <= 0.0:
+        return 0.0
+    return count / duration_seconds
+
+
 def _build_schedule(optimizer_config: OptimizerConfig, total_steps: int):
     """Build an Optax learning-rate schedule."""
     schedule_config = optimizer_config.schedule
@@ -190,7 +198,18 @@ def _make_train_step(optimizer):
             params=eqx.filter(model, eqx.is_inexact_array),
         )
         new_model = eqx.apply_updates(model, updates)
-        return new_model, new_state, new_opt_state, {"loss": loss, "accuracy": accuracy}
+        return (
+            new_model,
+            new_state,
+            new_opt_state,
+            {
+                "loss": loss,
+                "accuracy": accuracy,
+                "grad_norm": optax.global_norm(grads),
+                "update_norm": optax.global_norm(updates),
+                "param_norm": optax.global_norm(eqx.filter(model, eqx.is_inexact_array)),
+            },
+        )
 
     return train_step
 
@@ -505,6 +524,7 @@ def _maybe_run_evaluation(
     ):
         return
 
+    eval_started_at = perf_counter()
     evaluation_metrics = _evaluate(
         runtime_state.model,
         runtime_state.state,
@@ -513,7 +533,14 @@ def _maybe_run_evaluation(
         split_name=validation_split_name,
         seed=experiment_config.trainer.seed + runtime_state.final_step,
     )
+    eval_duration_seconds = perf_counter() - eval_started_at
+    split = getattr(dataset_bundle, validation_split_name)
     evaluation_metrics["step"] = runtime_state.final_step
+    evaluation_metrics[f"{validation_split_name}_duration_seconds"] = eval_duration_seconds
+    evaluation_metrics[f"{validation_split_name}_examples_per_second"] = _safe_throughput(
+        len(split),
+        eval_duration_seconds,
+    )
     append_history(output_dir, evaluation_metrics)
     tracker.log(evaluation_metrics, step=runtime_state.final_step)
 
@@ -724,6 +751,7 @@ def run_experiment(
                 if runtime_state.final_step >= total_steps:
                     break
 
+                step_started_at = perf_counter()
                 loop_key, step_key = jr.split(loop_key)
                 (
                     runtime_state.model,
@@ -738,6 +766,7 @@ def run_experiment(
                     batch_targets,
                     step_key,
                 )
+                step_duration_seconds = perf_counter() - step_started_at
                 runtime_state.final_step += 1
 
                 step_metrics = {
@@ -746,6 +775,14 @@ def run_experiment(
                     "learning_rate": float(learning_rate_schedule(runtime_state.final_step - 1)),
                     "train_loss": float(train_metrics["loss"]),
                     "train_accuracy": float(train_metrics["accuracy"]),
+                    "grad_norm": float(train_metrics["grad_norm"]),
+                    "update_norm": float(train_metrics["update_norm"]),
+                    "param_norm": float(train_metrics["param_norm"]),
+                    "step_time_seconds": step_duration_seconds,
+                    "examples_per_second": _safe_throughput(
+                        batch_inputs.shape[0],
+                        step_duration_seconds,
+                    ),
                 }
 
                 if runtime_state.final_step % experiment_config.trainer.log_every_steps == 0:

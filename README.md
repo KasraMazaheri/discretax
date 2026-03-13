@@ -130,7 +130,7 @@ The repository now includes a packaged training stack with:
 
 - hierarchical YAML experiment configs under `configs/`
 - dataset loaders for MNIST, CIFAR-10, and preprocessed UEA datasets
-- an Optax-based Equinox training runtime with checkpoints, JSONL history, and run metadata
+- an Optax-based Equinox training runtime with checkpoints, JSONL history, run metadata, and diagnostics
 - optional Weights & Biases logging with stable run naming and flattened config logging
 
 Helper scripts now live under `scripts/`:
@@ -181,6 +181,7 @@ Each run directory now includes:
 
 - `config.yaml` with the fully resolved experiment config
 - `history.jsonl` with step and evaluation metrics
+- `history.jsonl` includes optimizer diagnostics, throughput, and evaluation timing
 - `summary.json` with final metrics and run timing
 - `run_metadata.json` with git state, host info, JAX backend, and visible devices
 - `checkpoints/` with `best`, `latest`, and periodic `step-*` snapshots
