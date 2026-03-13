@@ -41,10 +41,17 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
     C: jax.Array
     D: jax.Array
     steps: jax.Array
+    head_gate: eqx.nn.Linear | None
+    head_output_projection: eqx.nn.Linear | None
 
     # non learnable static fields
     discretization: Literal["IM", "IMEX"] = eqx.field(static=True)
     damping: bool = eqx.field(static=True)
+    num_heads: int = eqx.field(static=True)
+    head_hidden_dim: int = eqx.field(static=True)
+    head_state_dim: int = eqx.field(static=True)
+    use_head_gating: bool = eqx.field(static=True)
+    use_head_output_projection: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -56,6 +63,9 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
         damping: bool = True,
         r_min: float = 0.9,
         theta_max: float = jnp.pi,
+        num_heads: int = 1,
+        use_head_gating: bool = False,
+        use_head_output_projection: bool = False,
         dtype: jnp.dtype = jnp.float32,
         **kwargs,
     ):
@@ -69,44 +79,130 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
             damping: whether to use damping.
             r_min: minimum value for the radius.
             theta_max: maximum value for the theta parameter.
+            num_heads: number of independent LinOSS heads.
+            use_head_gating: whether to apply token-wise head gating before merge.
+            use_head_output_projection: whether to apply a learned output projection after
+                concatenating multi-head outputs.
             dtype: dtype for sequence mixer parameters and computation.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
         dtype = jnp.dtype(dtype)
-        A_key, G_key, B_key, C_key, D_key, step_key, key = jr.split(key, 7)
-
-        self.steps = normal(stddev=0.5)(step_key, (state_dim,), dtype=dtype)
-        steps = nn.sigmoid(self.steps)
-
-        if discretization == "IMEX" and damping:
-            r_max = 1.0
-            mags = jnp.sqrt(
-                random.uniform(G_key, shape=(state_dim,), dtype=dtype) * (r_max**2 - r_min**2)
-                + r_min**2
+        if num_heads <= 0:
+            raise ValueError("num_heads must be positive")
+        if in_features % num_heads != 0:
+            raise ValueError(
+                f"in_features={in_features} must be divisible by num_heads={num_heads}"
             )
-            self.G_diag = ((1 - mags**2) / (steps * mags**2)).astype(dtype)
-            G_diag = nn.relu(self.G_diag)
+        if state_dim % num_heads != 0:
+            raise ValueError(f"state_dim={state_dim} must be divisible by num_heads={num_heads}")
 
-            theta = random.uniform(A_key, shape=(state_dim,), dtype=dtype) * theta_max
-            self.A_diag = _map_theta_to_A(theta, G_diag, steps).astype(dtype)
+        self.num_heads = num_heads
+        self.head_hidden_dim = in_features // num_heads
+        self.head_state_dim = state_dim // num_heads
+        self.use_head_gating = use_head_gating and num_heads > 1
+        self.use_head_output_projection = use_head_output_projection and num_heads > 1
+
+        if num_heads == 1:
+            A_key, G_key, B_key, C_key, D_key, step_key, key = jr.split(key, 7)
+
+            self.steps = normal(stddev=0.5)(step_key, (state_dim,), dtype=dtype)
+            steps = nn.sigmoid(self.steps)
+
+            if discretization == "IMEX" and damping:
+                r_max = 1.0
+                mags = jnp.sqrt(
+                    random.uniform(G_key, shape=(state_dim,), dtype=dtype) * (r_max**2 - r_min**2)
+                    + r_min**2
+                )
+                self.G_diag = ((1 - mags**2) / (steps * mags**2)).astype(dtype)
+                G_diag = nn.relu(self.G_diag)
+
+                theta = random.uniform(A_key, shape=(state_dim,), dtype=dtype) * theta_max
+                self.A_diag = _map_theta_to_A(theta, G_diag, steps).astype(dtype)
+            else:
+                self.G_diag = None
+                self.A_diag = random.uniform(A_key, shape=(state_dim,), dtype=dtype)
+
+            self.B = _simple_uniform_init(
+                B_key,
+                shape=(state_dim, in_features, 2),
+                std=1.0 / math.sqrt(in_features),
+                dtype=dtype,
+            )
+            self.C = _simple_uniform_init(
+                C_key,
+                shape=(in_features, state_dim, 2),
+                std=1.0 / math.sqrt(state_dim),
+                dtype=dtype,
+            )
+            self.D = normal(stddev=1.0)(D_key, (in_features,), dtype=dtype)
         else:
-            self.G_diag = None
-            self.A_diag = random.uniform(A_key, shape=(state_dim,), dtype=dtype)
+            A_key, G_key, B_key, C_key, D_key, step_key, gate_key, proj_key, key = jr.split(key, 9)
 
-        self.B = _simple_uniform_init(
-            B_key,
-            shape=(state_dim, in_features, 2),
-            std=1.0 / math.sqrt(in_features),
-            dtype=dtype,
-        )
-        self.C = _simple_uniform_init(
-            C_key,
-            shape=(in_features, state_dim, 2),
-            std=1.0 / math.sqrt(state_dim),
-            dtype=dtype,
-        )
-        self.D = normal(stddev=1.0)(D_key, (in_features,), dtype=dtype)
+            self.steps = normal(stddev=0.5)(
+                step_key, (num_heads, self.head_state_dim), dtype=dtype
+            )
+            steps = nn.sigmoid(self.steps)
+
+            if discretization == "IMEX" and damping:
+                r_max = 1.0
+                mags = jnp.sqrt(
+                    random.uniform(
+                        G_key,
+                        shape=(num_heads, self.head_state_dim),
+                        dtype=dtype,
+                    )
+                    * (r_max**2 - r_min**2)
+                    + r_min**2
+                )
+                self.G_diag = ((1 - mags**2) / (steps * mags**2)).astype(dtype)
+                G_diag = nn.relu(self.G_diag)
+
+                theta = (
+                    random.uniform(
+                        A_key,
+                        shape=(num_heads, self.head_state_dim),
+                        dtype=dtype,
+                    )
+                    * theta_max
+                )
+                self.A_diag = _map_theta_to_A(theta, G_diag, steps).astype(dtype)
+            else:
+                self.G_diag = None
+                self.A_diag = random.uniform(
+                    A_key,
+                    shape=(num_heads, self.head_state_dim),
+                    dtype=dtype,
+                )
+
+            self.B = _simple_uniform_init(
+                B_key,
+                shape=(num_heads, self.head_state_dim, self.head_hidden_dim, 2),
+                std=1.0 / math.sqrt(self.head_hidden_dim),
+                dtype=dtype,
+            )
+            self.C = _simple_uniform_init(
+                C_key,
+                shape=(num_heads, self.head_hidden_dim, self.head_state_dim, 2),
+                std=1.0 / math.sqrt(self.head_state_dim),
+                dtype=dtype,
+            )
+            self.D = normal(stddev=1.0)(D_key, (num_heads, self.head_hidden_dim), dtype=dtype)
+            self.head_gate = (
+                eqx.nn.Linear(in_features, num_heads, key=gate_key, dtype=dtype)
+                if self.use_head_gating
+                else None
+            )
+            self.head_output_projection = (
+                eqx.nn.Linear(in_features, in_features, key=proj_key, dtype=dtype)
+                if self.use_head_output_projection
+                else None
+            )
+
+        if num_heads == 1:
+            self.head_gate = None
+            self.head_output_projection = None
 
         self.discretization = discretization
         self.damping = damping
@@ -122,7 +218,53 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
             The output of the LinOSS sequence mixer.
         """
         steps = nn.sigmoid(self.steps)
+        if self.num_heads > 1:
+            return self._apply_multi_head(x, steps)
+        return self._apply_single_head(x, steps)
 
+    def _apply_single_head(self, x: Array, steps: Array) -> Array:
+        """Apply the legacy single-head LinOSS recurrence and output projection."""
+        ys = self._apply_recurrence(self.A_diag, self.G_diag, self.B, x, steps)
+        Cy = jnp.einsum("hs,ls->lh", self.C[..., 0], ys[..., 0]) - jnp.einsum(
+            "hs,ls->lh",
+            self.C[..., 1],
+            ys[..., 1],
+        )
+        Du = jax.vmap(lambda u: self.D * u)(x)
+        return Cy + Du
+
+    def _apply_multi_head(self, x: Array, steps: Array) -> Array:
+        """Apply independent LinOSS heads and merge them back into the hidden stream."""
+        x_heads = x.reshape(x.shape[0], self.num_heads, self.head_hidden_dim)
+        scan_inputs = jnp.swapaxes(x_heads, 0, 1)
+        ys = jax.vmap(self._apply_recurrence)(self.A_diag, self.G_diag, self.B, scan_inputs, steps)
+        ys = jnp.swapaxes(ys, 0, 1)
+        head_outputs = jnp.einsum("hfs,lhs->lhf", self.C[..., 0], ys[..., 0]) - jnp.einsum(
+            "hfs,lhs->lhf",
+            self.C[..., 1],
+            ys[..., 1],
+        )
+        head_outputs = head_outputs + x_heads * self.D[None, ...]
+
+        if self.head_gate is not None:
+            gate_logits = jax.vmap(self.head_gate)(x)
+            gate_weights = nn.softmax(gate_logits, axis=-1)
+            head_outputs = head_outputs * gate_weights[..., None]
+
+        xs = head_outputs.reshape(x.shape[0], x.shape[1])
+        if self.head_output_projection is not None:
+            xs = jax.vmap(self.head_output_projection)(xs)
+        return xs
+
+    def _apply_recurrence(
+        self,
+        A_diag: Array,
+        G_diag: Array | None,
+        B: Array,
+        x: Array,
+        steps: Array,
+    ) -> Array:
+        """Apply the configured LinOSS recurrence for one head worth of parameters."""
         if self.discretization == "IM":
             if self.damping:
                 raise NotImplementedError(
@@ -130,38 +272,23 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
                         self.discretization, self.damping
                     )
                 )
-            else:
-                A_diag = nn.relu(self.A_diag)
-                ys = _apply_linoss_im(A_diag, self.B, x, steps)
-        elif self.discretization == "IMEX":
-            if self.damping:
-                G_diag = nn.relu(self.G_diag)
-                A_boundary_low = (2 + steps * G_diag - 2 * jnp.sqrt(1 + steps * G_diag)) / steps**2
-                A_boundary_high = (
-                    2 + steps * G_diag + 2 * jnp.sqrt(1 + steps * G_diag)
-                ) / steps**2
-                A_diag = (
-                    A_boundary_low
-                    + nn.relu(self.A_diag - A_boundary_low)
-                    - nn.relu(self.A_diag - A_boundary_high)
-                )
-                ys = _apply_damped_linoss_imex(A_diag, G_diag, self.B, x, steps)
-            else:
-                A_diag = nn.relu(self.A_diag)
-                ys = _apply_linoss_imex(A_diag, self.B, x, steps)
-        else:
+            return _apply_linoss_im(nn.relu(A_diag), B, x, steps)
+
+        if self.discretization != "IMEX":
             raise NotImplementedError(f"Discretization {self.discretization} not implemented")
 
-        # Apply SequenceMixer Output Operations Cx + Du
-        Cy = jnp.einsum("hs,ls->lh", self.C[..., 0], ys[..., 0]) - jnp.einsum(
-            "hs,ls->lh",
-            self.C[..., 1],
-            ys[..., 1],
-        )
-        Du = jax.vmap(lambda u: self.D * u)(x)
-        xs = Cy + Du
+        if not self.damping:
+            return _apply_linoss_imex(nn.relu(A_diag), B, x, steps)
 
-        return xs
+        positive_g = nn.relu(G_diag)
+        A_boundary_low = (2 + steps * positive_g - 2 * jnp.sqrt(1 + steps * positive_g)) / steps**2
+        A_boundary_high = (
+            2 + steps * positive_g + 2 * jnp.sqrt(1 + steps * positive_g)
+        ) / steps**2
+        projected_a = (
+            A_boundary_low + nn.relu(A_diag - A_boundary_low) - nn.relu(A_diag - A_boundary_high)
+        )
+        return _apply_damped_linoss_imex(projected_a, positive_g, B, x, steps)
 
 
 def _simple_uniform_init(rng, shape, std=1.0, dtype=jnp.float32):

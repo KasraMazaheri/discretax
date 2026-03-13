@@ -10,6 +10,9 @@ model:
     kwargs:
       num_blocks: 4
       state_dim: 64
+      num_heads: 1
+      use_head_gating: false
+      use_head_output_projection: false
       drop_rate: 0.1
       prenorm: true
   head:

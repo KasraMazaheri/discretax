@@ -170,3 +170,56 @@ def test_linoss_real_pair_supports_low_precision(dtype):
     linoss_outputs = linoss(x, key=jr.PRNGKey(8))
 
     assert jnp.isfinite(linoss_outputs).all()
+
+
+@pytest.mark.parametrize(
+    ("use_head_gating", "use_head_output_projection"),
+    [(False, False), (True, False), (False, True)],
+)
+def test_linoss_multihead_variants_execute(
+    use_head_gating: bool,
+    use_head_output_projection: bool,
+):
+    """Multi-head LinOSS executes across the supported merge variants."""
+    mixer = LinOSSSequenceMixer(
+        in_features=8,
+        state_dim=12,
+        num_heads=2,
+        use_head_gating=use_head_gating,
+        use_head_output_projection=use_head_output_projection,
+        key=jr.PRNGKey(9),
+    )
+    x = jr.normal(jr.PRNGKey(10), (7, 8))
+
+    outputs = mixer(x, key=jr.PRNGKey(11))
+
+    assert outputs.shape == x.shape
+    assert jnp.isfinite(outputs).all()
+    _assert_no_complex_leaves(mixer)
+
+
+def test_linoss_single_head_flags_preserve_original_path():
+    """Single-head LinOSS ignores gating/projection flags and keeps the legacy shapes."""
+    mixer = LinOSSSequenceMixer(
+        in_features=6,
+        state_dim=8,
+        num_heads=1,
+        use_head_gating=True,
+        use_head_output_projection=True,
+        key=jr.PRNGKey(12),
+    )
+
+    assert mixer.B.shape == (8, 6, 2)
+    assert mixer.C.shape == (6, 8, 2)
+    assert mixer.D.shape == (6,)
+    assert mixer.head_gate is None
+    assert mixer.head_output_projection is None
+
+
+def test_linoss_multihead_requires_divisible_dimensions():
+    """Multi-head LinOSS validates hidden/state divisibility clearly."""
+    with pytest.raises(ValueError, match="in_features=7 must be divisible by num_heads=2"):
+        LinOSSSequenceMixer(in_features=7, state_dim=8, num_heads=2, key=jr.PRNGKey(13))
+
+    with pytest.raises(ValueError, match="state_dim=9 must be divisible by num_heads=2"):
+        LinOSSSequenceMixer(in_features=8, state_dim=9, num_heads=2, key=jr.PRNGKey(14))
