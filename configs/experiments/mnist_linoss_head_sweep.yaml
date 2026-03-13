@@ -1,0 +1,62 @@
+defaults:
+  - ../base
+  - ../datasets/mnist
+  - ../models/linoss
+
+name: mnist-linoss-head-sweep
+description: Multi-head LinOSS sweep on MNIST for convergence and merge-ablation comparisons.
+tags:
+  - mnist
+  - linoss
+  - multihead
+  - sweep
+loader:
+  batch_size: 256
+  eval_batch_size: 512
+optimizer:
+  name: adamw
+  learning_rate: 0.0007
+  weight_decay: 0.0001
+  grad_clip_norm: 1.0
+  schedule:
+    name: warmup_cosine_decay
+    warmup_steps: 20
+    decay_steps: 300
+    end_value: 0.00007
+model:
+  name: linoss
+  hidden_dim: 256
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 4
+      state_dim: 256
+      num_heads: 1
+      use_head_gating: false
+      use_head_output_projection: false
+      drop_rate: 0.0
+      prenorm: true
+      discretization: IMEX
+      damping: true
+  head:
+    target: ClassificationHead
+    kwargs:
+      reduce: true
+trainer:
+  seed: 0
+  num_epochs: 2
+  max_steps: 300
+  log_every_steps: 25
+  eval_every_steps: 25
+  checkpoint_every_steps: 150
+precision:
+  mode: bfloat16_mixed
+wandb:
+  enabled: true
+  mode: offline
+  project: discretax-linoss-sweeps
+  group: mnist-linoss-head-sweep
+  job_type: train
+  tags:
+    - offline
+    - multihead
