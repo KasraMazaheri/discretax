@@ -53,6 +53,49 @@ def write_summary(output_dir: Path, summary: dict[str, Any]) -> Path:
     return summary_path
 
 
+def resolve_checkpoint_directory(
+    checkpoint_path: str | Path,
+    *,
+    default_checkpoint_name: str,
+) -> Path:
+    """Resolve a checkpoint path from either a run directory or a checkpoint directory."""
+    checkpoint_path = Path(checkpoint_path)
+    if (checkpoint_path / "model.eqx").exists():
+        return checkpoint_path
+
+    checkpoints_dir = checkpoint_path / "checkpoints"
+    if checkpoints_dir.exists():
+        candidate = checkpoints_dir / default_checkpoint_name
+        if candidate.exists():
+            return candidate
+        if default_checkpoint_name == "latest":
+            step_candidates = sorted(
+                (
+                    path
+                    for path in checkpoints_dir.iterdir()
+                    if path.is_dir() and path.name.startswith("step-")
+                ),
+                key=lambda path: int(path.name.removeprefix("step-")),
+            )
+            if step_candidates:
+                return step_candidates[-1]
+        raise FileNotFoundError(
+            f"Checkpoint {default_checkpoint_name!r} does not exist under {checkpoints_dir}"
+        )
+
+    raise FileNotFoundError(f"Could not resolve a checkpoint directory from {checkpoint_path}")
+
+
+def checkpoint_run_directory(checkpoint_dir: str | Path) -> Path:
+    """Return the parent run directory for a checkpoint directory."""
+    checkpoint_dir = Path(checkpoint_dir)
+    if checkpoint_dir.parent.name != "checkpoints":
+        raise ValueError(
+            f"Checkpoint directory is not nested under a checkpoints folder: {checkpoint_dir}"
+        )
+    return checkpoint_dir.parent.parent
+
+
 def save_checkpoint(
     output_dir: Path,
     checkpoint_name: str,
@@ -71,3 +114,20 @@ def save_checkpoint(
     with (checkpoint_dir / "metadata.json").open("w", encoding="utf-8") as file:
         json.dump(metadata, file, indent=2, sort_keys=True)
     return checkpoint_dir
+
+
+def load_checkpoint(
+    checkpoint_dir: str | Path,
+    *,
+    model_like: Any,
+    state_like: Any,
+    opt_state_like: Any,
+) -> tuple[Any, Any, Any, dict[str, Any]]:
+    """Load a checkpoint bundle into pre-built PyTree templates."""
+    checkpoint_dir = Path(checkpoint_dir)
+    model = eqx.tree_deserialise_leaves(checkpoint_dir / "model.eqx", model_like)
+    state = eqx.tree_deserialise_leaves(checkpoint_dir / "state.eqx", state_like)
+    opt_state = eqx.tree_deserialise_leaves(checkpoint_dir / "opt_state.eqx", opt_state_like)
+    with (checkpoint_dir / "metadata.json").open("r", encoding="utf-8") as file:
+        metadata = json.load(file)
+    return model, state, opt_state, metadata

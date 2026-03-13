@@ -26,6 +26,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the fully resolved config and exit.",
     )
+    parser.add_argument(
+        "--resume-from",
+        help="Resume from a run directory or checkpoint directory.",
+    )
+    parser.add_argument(
+        "--eval-only",
+        action="store_true",
+        help="Load a checkpoint from --resume-from and run evaluation without training.",
+    )
     return parser
 
 
@@ -38,7 +47,11 @@ def main() -> None:
         print(yaml.safe_dump(experiment_config.to_dict(), sort_keys=False))
         return
 
-    result = run_experiment(experiment_config)
+    result = run_experiment(
+        experiment_config,
+        resume_from=args.resume_from,
+        eval_only=args.eval_only,
+    )
     print(
         yaml.safe_dump(
             {
@@ -47,6 +60,7 @@ def main() -> None:
                 "final_step": result.final_step,
                 "test_loss": result.test_loss,
                 "test_accuracy": result.test_accuracy,
+                "mode": result.mode,
             },
             sort_keys=False,
         )

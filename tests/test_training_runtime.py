@@ -1,6 +1,7 @@
 """Smoke tests for the experiment training runtime."""
 
 import pickle
+from json import loads
 from pathlib import Path
 
 import pytest
@@ -42,12 +43,9 @@ def _write_tiny_uea_dataset(root: Path) -> None:
             pickle.dump(payload, file)
 
 
-@pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")
-def test_run_experiment_smoke(tmp_path: Path):
-    """A tiny configured training run completes and writes outputs."""
-    _write_tiny_uea_dataset(tmp_path)
-
-    config_path = tmp_path / "base.yaml"
+def _write_runtime_config(tmp_path: Path, *, max_steps: int) -> Path:
+    """Write a tiny runtime config and return its path."""
+    config_path = tmp_path / f"runtime-{max_steps}.yaml"
     config_path.write_text(
         f"""
 name: tiny-uea-smoke
@@ -64,11 +62,11 @@ optimizer:
     name: constant
 trainer:
   seed: 0
-  num_epochs: 1
-  max_steps: 2
+  num_epochs: 2
+  max_steps: {max_steps}
   log_every_steps: 1
   eval_every_steps: 1
-  checkpoint_every_steps: 2
+  checkpoint_every_steps: 1
 dataset:
   kind: uea
   name: TinyUEA
@@ -98,8 +96,14 @@ wandb:
   enabled: false
 """.strip()
     )
+    return config_path
 
-    config = load_experiment_config(config_path)
+
+@pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")
+def test_run_experiment_smoke(tmp_path: Path):
+    """A tiny configured training run completes and writes outputs."""
+    _write_tiny_uea_dataset(tmp_path)
+    config = load_experiment_config(_write_runtime_config(tmp_path, max_steps=2))
     result = run_experiment(config)
 
     assert result.final_step == 2
@@ -108,3 +112,48 @@ wandb:
     assert (result.output_dir / "summary.json").exists()
     assert (result.output_dir / "history.jsonl").exists()
     assert (result.output_dir / "checkpoints" / "best").exists()
+    assert (result.output_dir / "checkpoints" / "latest").exists()
+
+
+@pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")
+def test_run_experiment_resume_from_run_directory(tmp_path: Path):
+    """Training resumes from the latest checkpoint in an existing run directory."""
+    _write_tiny_uea_dataset(tmp_path)
+
+    initial_config = load_experiment_config(_write_runtime_config(tmp_path, max_steps=2))
+    initial_result = run_experiment(initial_config)
+
+    resumed_config = load_experiment_config(_write_runtime_config(tmp_path, max_steps=4))
+    resumed_result = run_experiment(resumed_config, resume_from=initial_result.output_dir)
+
+    assert resumed_result.output_dir == initial_result.output_dir
+    assert resumed_result.final_step == 4
+    assert resumed_result.mode == "train"
+    history_lines = (
+        (initial_result.output_dir / "history.jsonl").read_text(encoding="utf-8").splitlines()
+    )
+    assert len(history_lines) >= 8
+    latest_metadata = loads(
+        (initial_result.output_dir / "checkpoints" / "latest" / "metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert latest_metadata["step"] == 4
+
+
+@pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")
+def test_run_experiment_eval_only_from_run_directory(tmp_path: Path):
+    """Eval-only mode restores a checkpoint and writes a fresh evaluation run."""
+    _write_tiny_uea_dataset(tmp_path)
+
+    train_config = load_experiment_config(_write_runtime_config(tmp_path, max_steps=2))
+    train_result = run_experiment(train_config)
+
+    eval_result = run_experiment(train_config, resume_from=train_result.output_dir, eval_only=True)
+
+    assert eval_result.mode == "eval_only"
+    assert eval_result.output_dir != train_result.output_dir
+    assert (eval_result.output_dir / "summary.json").exists()
+    summary = loads((eval_result.output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["mode"] == "eval_only"
+    assert summary["restored_step"] == 2

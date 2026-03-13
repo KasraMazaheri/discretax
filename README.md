@@ -159,6 +159,24 @@ uv run discretax-train \
   --set optimizer.learning_rate=0.001
 ```
 
+Resume training from an existing run directory:
+
+```bash
+uv run discretax-train \
+  --config configs/experiments/uea_eigenworms_linoss_sanity.yaml \
+  --resume-from outputs/20260313-025347-uea-eigenworms-linoss-sanity \
+  --set trainer.max_steps=32
+```
+
+Evaluate a saved checkpoint without further training:
+
+```bash
+uv run discretax-train \
+  --config configs/experiments/uea_eigenworms_linoss_sanity.yaml \
+  --resume-from outputs/20260313-025347-uea-eigenworms-linoss-sanity \
+  --eval-only
+```
+
 UEA support expects the preprocessed split layout used in the sibling `linoss` repositories:
 
 ```text

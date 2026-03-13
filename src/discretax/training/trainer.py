@@ -17,7 +17,10 @@ from discretax.training.config import ExperimentConfig, OptimizerConfig
 from discretax.training.factory import build_model
 from discretax.training.io import (
     append_history,
+    checkpoint_run_directory,
     create_run_directory,
+    load_checkpoint,
+    resolve_checkpoint_directory,
     save_checkpoint,
     write_resolved_config,
     write_summary,
@@ -35,6 +38,24 @@ class RunResult:
     final_step: int
     test_loss: float
     test_accuracy: float
+    mode: str = "train"
+
+
+@dataclass(slots=True)
+class _RuntimeState:
+    """Mutable runtime state for a training or evaluation run."""
+
+    model: eqx.nn.Sequential
+    state: eqx.nn.State
+    opt_state: optax.OptState
+    best_metric: float
+    best_model: eqx.nn.Sequential
+    best_state: eqx.nn.State
+    final_step: int
+    start_epoch: int
+    steps_to_skip_in_epoch: int
+    checkpoint_dir: Path | None
+    resume_metadata: dict[str, Any] | None
 
 
 def _batched_forward(
@@ -63,7 +84,9 @@ def _batched_forward(
     )
 
 
-def _classification_metrics(log_probs: jax.Array, targets: jax.Array) -> tuple[jax.Array, jax.Array]:
+def _classification_metrics(
+    log_probs: jax.Array, targets: jax.Array
+) -> tuple[jax.Array, jax.Array]:
     """Compute classification loss and accuracy."""
     loss = -jnp.mean(log_probs[jnp.arange(targets.shape[0]), targets])
     accuracy = jnp.mean(jnp.argmax(log_probs, axis=-1) == targets)
@@ -205,7 +228,9 @@ def _evaluate(
             seed=seed,
         )
     ):
-        metrics = _eval_step(model, state, batch_inputs, batch_targets, jr.PRNGKey(seed + batch_index))
+        metrics = _eval_step(
+            model, state, batch_inputs, batch_targets, jr.PRNGKey(seed + batch_index)
+        )
         losses.append(float(metrics["loss"]))
         accuracies.append(float(metrics["accuracy"]))
 
@@ -222,30 +247,140 @@ def _is_improved(value: float, best_value: float, mode: str) -> bool:
     return value > best_value
 
 
-def run_experiment(experiment_config: ExperimentConfig) -> RunResult:
-    """Execute a configured experiment end to end."""
-    dataset_bundle = build_dataset(experiment_config.paths, experiment_config.dataset)
-    output_dir = create_run_directory(experiment_config)
-    tracker = create_tracker(experiment_config, output_dir)
-    write_resolved_config(experiment_config, output_dir)
+def _checkpoint_metadata(
+    *,
+    epoch: int,
+    step: int,
+    best_metric: float,
+    monitor: str,
+    monitor_value: float | None = None,
+) -> dict[str, Any]:
+    """Build checkpoint metadata consistently."""
+    metadata: dict[str, Any] = {
+        "epoch": epoch,
+        "step": step,
+        "best_metric": best_metric,
+        "monitor": monitor,
+    }
+    if monitor_value is not None:
+        metadata["monitor_value"] = monitor_value
+    return metadata
 
-    master_key = jr.PRNGKey(experiment_config.trainer.seed)
-    model_key, loop_key = jr.split(master_key)
-    model = build_model(experiment_config, dataset_bundle, model_key)
-    state = eqx.nn.State(model)
 
-    total_steps = experiment_config.trainer.max_steps
-    if total_steps is None:
-        total_steps = experiment_config.trainer.num_epochs * count_batches(
-            dataset_bundle.train,
-            experiment_config.loader.batch_size,
-            drop_last=experiment_config.loader.drop_last_train,
+def _steps_per_epoch(dataset_bundle: DatasetBundle, experiment_config: ExperimentConfig) -> int:
+    """Return the deterministic number of train batches per epoch."""
+    return count_batches(
+        dataset_bundle.train,
+        experiment_config.loader.batch_size,
+        drop_last=experiment_config.loader.drop_last_train,
+    )
+
+
+def _resolve_total_steps(
+    dataset_bundle: DatasetBundle,
+    experiment_config: ExperimentConfig,
+) -> int:
+    """Resolve the total number of optimizer steps for a run."""
+    if experiment_config.trainer.max_steps is not None:
+        return experiment_config.trainer.max_steps
+    return experiment_config.trainer.num_epochs * _steps_per_epoch(
+        dataset_bundle,
+        experiment_config,
+    )
+
+
+def _initialize_runtime_state(
+    experiment_config: ExperimentConfig,
+    *,
+    model: eqx.nn.Sequential,
+    state: eqx.nn.State,
+    opt_state: optax.OptState,
+    dataset_bundle: DatasetBundle,
+    eval_only: bool,
+    resume_from: str | Path | None,
+) -> _RuntimeState:
+    """Restore model runtime state when resuming from a checkpoint."""
+    checkpoint_dir: Path | None = None
+    resume_metadata: dict[str, Any] | None = None
+    if resume_from is not None:
+        default_checkpoint_name = "best" if eval_only else "latest"
+        checkpoint_dir = resolve_checkpoint_directory(
+            resume_from,
+            default_checkpoint_name=default_checkpoint_name,
+        )
+        model, state, opt_state, resume_metadata = load_checkpoint(
+            checkpoint_dir,
+            model_like=model,
+            state_like=state,
+            opt_state_like=opt_state,
         )
 
-    optimizer, learning_rate_schedule = _build_optimizer(experiment_config.optimizer, total_steps)
-    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
-    train_step = _make_train_step(optimizer)
+    best_metric = float("inf") if experiment_config.checkpoint.mode == "min" else float("-inf")
+    runtime_state = _RuntimeState(
+        model=model,
+        state=state,
+        opt_state=opt_state,
+        best_metric=best_metric,
+        best_model=model,
+        best_state=state,
+        final_step=0,
+        start_epoch=0,
+        steps_to_skip_in_epoch=0,
+        checkpoint_dir=checkpoint_dir,
+        resume_metadata=resume_metadata,
+    )
+    if resume_metadata is None:
+        return runtime_state
 
+    runtime_state.final_step = int(resume_metadata["step"])
+    runtime_state.best_metric = float(
+        resume_metadata.get(
+            "best_metric",
+            resume_metadata.get("monitor_value", runtime_state.best_metric),
+        )
+    )
+    steps_per_epoch = _steps_per_epoch(dataset_bundle, experiment_config)
+    if steps_per_epoch == 0:
+        return runtime_state
+
+    runtime_state.start_epoch = runtime_state.final_step // steps_per_epoch
+    runtime_state.steps_to_skip_in_epoch = runtime_state.final_step % steps_per_epoch
+    return runtime_state
+
+
+def _resolve_output_directory(
+    experiment_config: ExperimentConfig,
+    *,
+    checkpoint_dir: Path | None,
+    eval_only: bool,
+) -> Path:
+    """Resolve the output directory for a run."""
+    if eval_only:
+        return create_run_directory(experiment_config)
+    if checkpoint_dir is not None:
+        return checkpoint_run_directory(checkpoint_dir)
+    return create_run_directory(experiment_config)
+
+
+def _write_run_config(
+    experiment_config: ExperimentConfig,
+    *,
+    output_dir: Path,
+    checkpoint_dir: Path | None,
+    eval_only: bool,
+) -> None:
+    """Write the resolved config when creating a new run directory."""
+    if checkpoint_dir is not None and not eval_only:
+        return
+    write_resolved_config(experiment_config, output_dir)
+
+
+def _log_static_summary(
+    tracker: Any,
+    dataset_bundle: DatasetBundle,
+    model: eqx.nn.Sequential,
+) -> None:
+    """Record static dataset and model metadata."""
     tracker.summary(
         {
             "dataset_name": dataset_bundle.name,
@@ -256,129 +391,327 @@ def run_experiment(experiment_config: ExperimentConfig) -> RunResult:
         }
     )
 
-    best_metric = float("inf") if experiment_config.checkpoint.mode == "min" else float("-inf")
-    best_model = model
-    best_state = state
-    final_step = 0
 
-    validation_split_name = "validation" if len(dataset_bundle.validation) > 0 else "test"
-
-    for epoch in range(experiment_config.trainer.num_epochs):
-        epoch_seed = experiment_config.trainer.seed + epoch
-        for batch_inputs, batch_targets in batch_iterator(
-            dataset_bundle.train,
-            experiment_config.loader.batch_size,
-            shuffle=experiment_config.loader.shuffle_train,
-            drop_last=experiment_config.loader.drop_last_train,
-            seed=epoch_seed,
-        ):
-            if final_step >= total_steps:
-                break
-
-            loop_key, step_key = jr.split(loop_key)
-            model, state, opt_state, train_metrics = train_step(
-                model,
-                state,
-                opt_state,
-                batch_inputs,
-                batch_targets,
-                step_key,
-            )
-            final_step += 1
-
-            step_metrics = {
-                "epoch": epoch,
-                "step": final_step,
-                "learning_rate": float(learning_rate_schedule(final_step - 1)),
-                "train_loss": float(train_metrics["loss"]),
-                "train_accuracy": float(train_metrics["accuracy"]),
-            }
-
-            if final_step % experiment_config.trainer.log_every_steps == 0:
-                append_history(output_dir, step_metrics)
-                tracker.log(step_metrics, step=final_step)
-
-            if final_step % experiment_config.trainer.eval_every_steps == 0 or final_step == total_steps:
-                evaluation_metrics = _evaluate(
-                    model,
-                    state,
-                    dataset_bundle,
-                    experiment_config,
-                    split_name=validation_split_name,
-                    seed=experiment_config.trainer.seed + final_step,
-                )
-                evaluation_metrics["step"] = final_step
-                append_history(output_dir, evaluation_metrics)
-                tracker.log(evaluation_metrics, step=final_step)
-
-                monitored_value = evaluation_metrics[
-                    f"{validation_split_name}_{experiment_config.checkpoint.monitor.removeprefix('val_')}"
-                ]
-                if _is_improved(
-                    monitored_value,
-                    best_metric,
-                    experiment_config.checkpoint.mode,
-                ):
-                    best_metric = monitored_value
-                    best_model = model
-                    best_state = state
-                    if experiment_config.checkpoint.enabled and experiment_config.checkpoint.save_best:
-                        save_checkpoint(
-                            output_dir,
-                            "best",
-                            model=best_model,
-                            state=best_state,
-                            opt_state=opt_state,
-                            metadata={
-                                "step": final_step,
-                                "monitor": experiment_config.checkpoint.monitor,
-                                "monitor_value": monitored_value,
-                            },
-                        )
-
-            if final_step % experiment_config.trainer.checkpoint_every_steps == 0:
-                if experiment_config.checkpoint.enabled:
-                    save_checkpoint(
-                        output_dir,
-                        f"step-{final_step}",
-                        model=model,
-                        state=state,
-                        opt_state=opt_state,
-                        metadata={"step": final_step},
-                    )
-
-        if final_step >= total_steps:
-            break
+def _run_eval_only(
+    experiment_config: ExperimentConfig,
+    *,
+    dataset_bundle: DatasetBundle,
+    runtime_state: _RuntimeState,
+    output_dir: Path,
+    tracker: Any,
+) -> RunResult:
+    """Evaluate a restored checkpoint without further training."""
+    if runtime_state.checkpoint_dir is None or runtime_state.resume_metadata is None:
+        raise ValueError("eval_only requires a checkpoint via resume_from")
 
     test_metrics = _evaluate(
-        best_model,
-        best_state,
+        runtime_state.model,
+        runtime_state.state,
         dataset_bundle,
         experiment_config,
         split_name="test",
-        seed=experiment_config.trainer.seed + final_step + 1,
+        seed=experiment_config.trainer.seed + runtime_state.final_step + 1,
     )
     tracker.summary(
         {
-            "best_metric": best_metric,
+            "restored_step": runtime_state.final_step,
             **test_metrics,
-            "final_step": final_step,
         }
     )
     write_summary(
         output_dir,
         {
-            "best_metric": best_metric,
-            "final_step": final_step,
+            "mode": "eval_only",
+            "restored_checkpoint": str(runtime_state.checkpoint_dir),
+            "restored_step": runtime_state.final_step,
             **test_metrics,
         },
     )
     tracker.finish()
-
     return RunResult(
         output_dir=output_dir,
-        best_metric=best_metric,
-        final_step=final_step,
+        best_metric=runtime_state.best_metric,
+        final_step=runtime_state.final_step,
         test_loss=test_metrics["test_loss"],
         test_accuracy=test_metrics["test_accuracy"],
+        mode="eval_only",
+    )
+
+
+def _maybe_run_evaluation(
+    experiment_config: ExperimentConfig,
+    *,
+    dataset_bundle: DatasetBundle,
+    runtime_state: _RuntimeState,
+    output_dir: Path,
+    tracker: Any,
+    epoch: int,
+    validation_split_name: str,
+) -> None:
+    """Evaluate the current model, track metrics, and update best checkpoint state."""
+    if (
+        runtime_state.final_step % experiment_config.trainer.eval_every_steps != 0
+        and runtime_state.final_step != _resolve_total_steps(dataset_bundle, experiment_config)
+    ):
+        return
+
+    evaluation_metrics = _evaluate(
+        runtime_state.model,
+        runtime_state.state,
+        dataset_bundle,
+        experiment_config,
+        split_name=validation_split_name,
+        seed=experiment_config.trainer.seed + runtime_state.final_step,
+    )
+    evaluation_metrics["step"] = runtime_state.final_step
+    append_history(output_dir, evaluation_metrics)
+    tracker.log(evaluation_metrics, step=runtime_state.final_step)
+
+    monitored_value = evaluation_metrics[
+        f"{validation_split_name}_{experiment_config.checkpoint.monitor.removeprefix('val_')}"
+    ]
+    if not _is_improved(
+        monitored_value,
+        runtime_state.best_metric,
+        experiment_config.checkpoint.mode,
+    ):
+        return
+
+    runtime_state.best_metric = monitored_value
+    runtime_state.best_model = runtime_state.model
+    runtime_state.best_state = runtime_state.state
+    if not (experiment_config.checkpoint.enabled and experiment_config.checkpoint.save_best):
+        return
+
+    save_checkpoint(
+        output_dir,
+        "best",
+        model=runtime_state.best_model,
+        state=runtime_state.best_state,
+        opt_state=runtime_state.opt_state,
+        metadata=_checkpoint_metadata(
+            epoch=epoch,
+            step=runtime_state.final_step,
+            best_metric=runtime_state.best_metric,
+            monitor=experiment_config.checkpoint.monitor,
+            monitor_value=monitored_value,
+        ),
+    )
+
+
+def _maybe_save_progress_checkpoint(
+    experiment_config: ExperimentConfig,
+    *,
+    dataset_bundle: DatasetBundle,
+    runtime_state: _RuntimeState,
+    output_dir: Path,
+    epoch: int,
+) -> None:
+    """Persist latest and step checkpoints at configured save intervals."""
+    if not experiment_config.checkpoint.enabled:
+        return
+
+    total_steps = _resolve_total_steps(dataset_bundle, experiment_config)
+    save_latest = runtime_state.final_step % experiment_config.trainer.checkpoint_every_steps == 0
+    save_latest = save_latest or runtime_state.final_step == total_steps
+    if not save_latest:
+        return
+
+    metadata = _checkpoint_metadata(
+        epoch=epoch,
+        step=runtime_state.final_step,
+        best_metric=runtime_state.best_metric,
+        monitor=experiment_config.checkpoint.monitor,
+    )
+    save_checkpoint(
+        output_dir,
+        "latest",
+        model=runtime_state.model,
+        state=runtime_state.state,
+        opt_state=runtime_state.opt_state,
+        metadata=metadata,
+    )
+    save_checkpoint(
+        output_dir,
+        f"step-{runtime_state.final_step}",
+        model=runtime_state.model,
+        state=runtime_state.state,
+        opt_state=runtime_state.opt_state,
+        metadata=metadata,
+    )
+
+
+def _finalize_training_run(
+    experiment_config: ExperimentConfig,
+    *,
+    dataset_bundle: DatasetBundle,
+    runtime_state: _RuntimeState,
+    output_dir: Path,
+    tracker: Any,
+) -> RunResult:
+    """Evaluate the best checkpoint on test data and write final outputs."""
+    test_metrics = _evaluate(
+        runtime_state.best_model,
+        runtime_state.best_state,
+        dataset_bundle,
+        experiment_config,
+        split_name="test",
+        seed=experiment_config.trainer.seed + runtime_state.final_step + 1,
+    )
+    tracker.summary(
+        {
+            "best_metric": runtime_state.best_metric,
+            **test_metrics,
+            "final_step": runtime_state.final_step,
+        }
+    )
+    write_summary(
+        output_dir,
+        {
+            "mode": "train",
+            "best_metric": runtime_state.best_metric,
+            "final_step": runtime_state.final_step,
+            **test_metrics,
+        },
+    )
+    tracker.finish()
+    return RunResult(
+        output_dir=output_dir,
+        best_metric=runtime_state.best_metric,
+        final_step=runtime_state.final_step,
+        test_loss=test_metrics["test_loss"],
+        test_accuracy=test_metrics["test_accuracy"],
+        mode="train",
+    )
+
+
+def run_experiment(
+    experiment_config: ExperimentConfig,
+    *,
+    resume_from: str | Path | None = None,
+    eval_only: bool = False,
+) -> RunResult:
+    """Execute a configured experiment end to end."""
+    dataset_bundle = build_dataset(experiment_config.paths, experiment_config.dataset)
+
+    master_key = jr.PRNGKey(experiment_config.trainer.seed)
+    model_key, loop_key = jr.split(master_key)
+    model = build_model(experiment_config, dataset_bundle, model_key)
+    state = eqx.nn.State(model)
+
+    total_steps = _resolve_total_steps(dataset_bundle, experiment_config)
+
+    optimizer, learning_rate_schedule = _build_optimizer(experiment_config.optimizer, total_steps)
+    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+
+    runtime_state = _initialize_runtime_state(
+        experiment_config,
+        model=model,
+        state=state,
+        opt_state=opt_state,
+        dataset_bundle=dataset_bundle,
+        eval_only=eval_only,
+        resume_from=resume_from,
+    )
+    output_dir = _resolve_output_directory(
+        experiment_config,
+        checkpoint_dir=runtime_state.checkpoint_dir,
+        eval_only=eval_only,
+    )
+
+    tracker = create_tracker(experiment_config, output_dir)
+    _write_run_config(
+        experiment_config,
+        output_dir=output_dir,
+        checkpoint_dir=runtime_state.checkpoint_dir,
+        eval_only=eval_only,
+    )
+
+    train_step = _make_train_step(optimizer)
+    _log_static_summary(tracker, dataset_bundle, runtime_state.model)
+
+    validation_split_name = "validation" if len(dataset_bundle.validation) > 0 else "test"
+
+    if eval_only:
+        return _run_eval_only(
+            experiment_config,
+            dataset_bundle=dataset_bundle,
+            runtime_state=runtime_state,
+            output_dir=output_dir,
+            tracker=tracker,
+        )
+
+    for epoch in range(runtime_state.start_epoch, experiment_config.trainer.num_epochs):
+        epoch_seed = experiment_config.trainer.seed + epoch
+        epoch_batches = list(
+            batch_iterator(
+                dataset_bundle.train,
+                experiment_config.loader.batch_size,
+                shuffle=experiment_config.loader.shuffle_train,
+                drop_last=experiment_config.loader.drop_last_train,
+                seed=epoch_seed,
+            )
+        )
+        batch_start_index = (
+            runtime_state.steps_to_skip_in_epoch if epoch == runtime_state.start_epoch else 0
+        )
+        for batch_inputs, batch_targets in epoch_batches[batch_start_index:]:
+            runtime_state.steps_to_skip_in_epoch = 0
+            if runtime_state.final_step >= total_steps:
+                break
+
+            loop_key, step_key = jr.split(loop_key)
+            (
+                runtime_state.model,
+                runtime_state.state,
+                runtime_state.opt_state,
+                train_metrics,
+            ) = train_step(
+                runtime_state.model,
+                runtime_state.state,
+                runtime_state.opt_state,
+                batch_inputs,
+                batch_targets,
+                step_key,
+            )
+            runtime_state.final_step += 1
+
+            step_metrics = {
+                "epoch": epoch,
+                "step": runtime_state.final_step,
+                "learning_rate": float(learning_rate_schedule(runtime_state.final_step - 1)),
+                "train_loss": float(train_metrics["loss"]),
+                "train_accuracy": float(train_metrics["accuracy"]),
+            }
+
+            if runtime_state.final_step % experiment_config.trainer.log_every_steps == 0:
+                append_history(output_dir, step_metrics)
+                tracker.log(step_metrics, step=runtime_state.final_step)
+
+            _maybe_run_evaluation(
+                experiment_config,
+                dataset_bundle=dataset_bundle,
+                runtime_state=runtime_state,
+                output_dir=output_dir,
+                tracker=tracker,
+                epoch=epoch,
+                validation_split_name=validation_split_name,
+            )
+            _maybe_save_progress_checkpoint(
+                experiment_config,
+                dataset_bundle=dataset_bundle,
+                runtime_state=runtime_state,
+                output_dir=output_dir,
+                epoch=epoch,
+            )
+
+        if runtime_state.final_step >= total_steps:
+            break
+
+    return _finalize_training_run(
+        experiment_config,
+        dataset_bundle=dataset_bundle,
+        runtime_state=runtime_state,
+        output_dir=output_dir,
+        tracker=tracker,
     )
