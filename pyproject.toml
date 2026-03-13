@@ -71,6 +71,13 @@ train = [
     "wandb>=0.19.11",
 ]
 
+data = [
+    "pandas>=2.3.2",
+    "scikit-learn>=1.7.2",
+    "sktime>=0.39.0",
+    "tqdm>=4.67.1",
+]
+
 docs = [
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.6.22",

@@ -11,7 +11,9 @@ from discretax.datasets import build_dataset
 from discretax.training import DatasetConfig, PathsConfig
 
 
-def _install_fake_torchvision(monkeypatch, *, mnist_data, mnist_targets, cifar_data, cifar_targets):
+def _install_fake_torchvision(
+    monkeypatch, *, mnist_data, mnist_targets, cifar_data, cifar_targets
+):
     """Install a fake torchvision module for dataset loader tests."""
 
     class DummyMNIST:
@@ -121,3 +123,29 @@ def test_build_uea_dataset_from_preprocessed_pickles(tmp_path: Path):
     assert dataset_bundle.num_classes == 2
     assert len(dataset_bundle.train) == 4
     assert np.isfinite(dataset_bundle.train.inputs).all()
+
+
+def test_build_uea_dataset_resolves_processed_alias_from_data_root(tmp_path: Path):
+    """UEA loader resolves `data/UEA`-style aliases to the processed layout."""
+    dataset_dir = tmp_path / "processed" / "UEA" / "TinyUEA"
+    dataset_dir.mkdir(parents=True)
+
+    payloads = {
+        "X_train.pkl": np.zeros((2, 3, 1), dtype=np.float32),
+        "X_val.pkl": np.zeros((1, 3, 1), dtype=np.float32),
+        "X_test.pkl": np.zeros((1, 3, 1), dtype=np.float32),
+        "y_train.pkl": np.array([0, 1], dtype=np.int32),
+        "y_val.pkl": np.array([0], dtype=np.int32),
+        "y_test.pkl": np.array([1], dtype=np.int32),
+    }
+    for name, value in payloads.items():
+        with (dataset_dir / name).open("wb") as file:
+            pickle.dump(value, file)
+
+    dataset_bundle = build_dataset(
+        PathsConfig(data_root=str(tmp_path)),
+        DatasetConfig(kind="uea", name="TinyUEA", root="UEA", normalize=False),
+    )
+
+    assert dataset_bundle.name == "TinyUEA"
+    assert dataset_bundle.sequence_length == 3

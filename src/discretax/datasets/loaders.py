@@ -79,7 +79,9 @@ def _prepare_image_sequences(images: np.ndarray, layout: str) -> np.ndarray:
     raise ValueError(f"Unsupported image sequence layout: {layout}")
 
 
-def _build_mnist_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig) -> DatasetBundle:
+def _build_mnist_dataset(
+    paths_config: PathsConfig, dataset_config: DatasetConfig
+) -> DatasetBundle:
     """Build the MNIST classification dataset bundle."""
     from torchvision.datasets import MNIST
 
@@ -87,8 +89,12 @@ def _build_mnist_dataset(paths_config: PathsConfig, dataset_config: DatasetConfi
     train_dataset = MNIST(root=dataset_path, train=True, download=dataset_config.download)
     test_dataset = MNIST(root=dataset_path, train=False, download=dataset_config.download)
 
-    train_inputs = _prepare_image_sequences(np.asarray(train_dataset.data), dataset_config.sequence_layout)
-    test_inputs = _prepare_image_sequences(np.asarray(test_dataset.data), dataset_config.sequence_layout)
+    train_inputs = _prepare_image_sequences(
+        np.asarray(train_dataset.data), dataset_config.sequence_layout
+    )
+    test_inputs = _prepare_image_sequences(
+        np.asarray(test_dataset.data), dataset_config.sequence_layout
+    )
     if dataset_config.normalize:
         train_inputs /= 255.0
         test_inputs /= 255.0
@@ -115,7 +121,9 @@ def _build_mnist_dataset(paths_config: PathsConfig, dataset_config: DatasetConfi
     )
 
 
-def _build_cifar10_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig) -> DatasetBundle:
+def _build_cifar10_dataset(
+    paths_config: PathsConfig, dataset_config: DatasetConfig
+) -> DatasetBundle:
     """Build the CIFAR-10 classification dataset bundle."""
     from torchvision.datasets import CIFAR10
 
@@ -123,8 +131,12 @@ def _build_cifar10_dataset(paths_config: PathsConfig, dataset_config: DatasetCon
     train_dataset = CIFAR10(root=dataset_path, train=True, download=dataset_config.download)
     test_dataset = CIFAR10(root=dataset_path, train=False, download=dataset_config.download)
 
-    train_inputs = _prepare_image_sequences(np.asarray(train_dataset.data), dataset_config.sequence_layout)
-    test_inputs = _prepare_image_sequences(np.asarray(test_dataset.data), dataset_config.sequence_layout)
+    train_inputs = _prepare_image_sequences(
+        np.asarray(train_dataset.data), dataset_config.sequence_layout
+    )
+    test_inputs = _prepare_image_sequences(
+        np.asarray(test_dataset.data), dataset_config.sequence_layout
+    )
     if dataset_config.normalize:
         train_inputs /= 255.0
         test_inputs /= 255.0
@@ -163,12 +175,21 @@ def _resolve_uea_directory(dataset_path: Path, dataset_name: str) -> Path:
         dataset_path / dataset_name,
         dataset_path / "UEA" / dataset_name,
         dataset_path / "processed" / "UEA" / dataset_name,
+        dataset_path.parent / "processed" / "UEA" / dataset_name,
     ]
+    if dataset_path.name == "UEA":
+        candidates.extend(
+            [
+                dataset_path.parent / "processed" / "UEA" / dataset_name,
+                dataset_path.parent / dataset_name,
+            ]
+        )
     for candidate in candidates:
         if candidate.exists():
             return candidate
     raise FileNotFoundError(
-        f"Could not find a preprocessed UEA dataset directory for {dataset_name!r} under {dataset_path}"
+        "Could not find a preprocessed UEA dataset directory "
+        f"for {dataset_name!r} under {dataset_path}"
     )
 
 

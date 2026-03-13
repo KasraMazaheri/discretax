@@ -4,7 +4,7 @@
 # =============================
 
 # Declare all targets as phony (not actual files)
-.PHONY: help clean format git-sync test-full install install-dev install-train install-cuda install-examples install-docs install-all clean-env remake-lockfile
+.PHONY: help clean format git-sync test-full install install-dev install-train install-data install-train-cuda install-cuda install-examples install-docs install-all clean-env remake-lockfile check-jax-backend download-uea process-uea
 
 # Default target - show help when just running 'make'
 .DEFAULT_GOAL := help
@@ -39,8 +39,23 @@ install-dev: ## Install development dependencies from `pyproject.toml`
 install-train: ## Install training/runtime dependencies from `pyproject.toml`
 	uv sync --extra train
 
+install-data: ## Install dataset preparation dependencies from `pyproject.toml`
+	uv sync --extra data
+
+install-train-cuda: ## Install training dependencies with CUDA-enabled JAX
+	uv sync --extra train --extra cu12
+
 install-cuda: ## Install dependencies with CUDA support
 	uv sync --extra cu12
+
+check-jax-backend: ## Print the active JAX backend and visible devices
+	uv run python scripts/env/check_jax_backend.py
+
+download-uea: ## Download the raw UEA archive into data/raw/UEA
+	uv run python scripts/datasets/download_uea.py
+
+process-uea: ## Convert raw UEA ARFF files into processed train/val/test pickles
+	uv run python scripts/datasets/process_uea.py
 
 install-examples: ## Install examples dependencies from `pyproject.toml`
 	uv sync --extra examples

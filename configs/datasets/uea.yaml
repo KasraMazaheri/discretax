@@ -1,7 +1,7 @@
 dataset:
   kind: uea
   name: EigenWorms
-  root: UEA
+  root: processed/UEA
   download: false
   validation_split: 0.0
   sequence_layout: time_major

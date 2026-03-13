@@ -28,6 +28,17 @@ If you don't care about the details, we provide [example notebooks](examples/01_
 
 To join our growing community of JAX and state space model enthusiasts, join our [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white&style=flat-square)](https://discord.gg/VazrGCxeT7) server. Feel free to write us a message (either there or to our personal email, see the bottom of this page) if you have any questions, comments, or just want to say hi!
 
+## Training Utilities
+
+The repository includes packaged experiment tooling under `src/discretax/training`, reusable experiment configs under `configs/`, and helper scripts under `scripts/`.
+
+For NVIDIA GPU training, install both the training and CUDA extras:
+
+```bash
+uv sync --extra train --extra cu12
+uv run python scripts/env/check_jax_backend.py --require-gpu
+```
+
 ## Installation
 [discretax](https://github.com/camail-official/discretax) is available as a PyPI package. To install it via uv, just run
 ```bash

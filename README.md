@@ -106,6 +106,18 @@ To install the packaged experiment and training stack (configs, datasets, Optax 
 uv sync --extra train
 ```
 
+For NVIDIA GPU training, install the training stack together with CUDA-enabled JAX:
+
+```bash
+uv sync --extra train --extra cu12
+```
+
+Then verify that JAX sees the GPU:
+
+```bash
+uv run python scripts/env/check_jax_backend.py --require-gpu
+```
+
 After installing the development dependencies (activate your environment if needed), enable the git hooks:
 
 ```bash
@@ -120,6 +132,11 @@ The repository now includes a packaged training stack with:
 - dataset loaders for MNIST, CIFAR-10, and preprocessed UEA datasets
 - an Optax-based Equinox training runtime with checkpoints and JSONL history
 - optional Weights & Biases logging with stable run naming and flattened config logging
+
+Helper scripts now live under `scripts/`:
+
+- `scripts/env/` for environment and runtime checks
+- `scripts/datasets/` for dataset download and preprocessing utilities
 
 Print a fully resolved config:
 
@@ -151,6 +168,14 @@ UEA support expects the preprocessed split layout used in the sibling `linoss` r
 <data_root>/processed/UEA/<dataset_name>/y_val.pkl
 <data_root>/processed/UEA/<dataset_name>/X_test.pkl
 <data_root>/processed/UEA/<dataset_name>/y_test.pkl
+```
+
+You can create that layout in this repo with:
+
+```bash
+uv sync --extra data
+uv run python scripts/datasets/download_uea.py
+uv run python scripts/datasets/process_uea.py --dataset EigenWorms
 ```
 
 ## Supported Models
