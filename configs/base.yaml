@@ -24,6 +24,8 @@ trainer:
   eval_every_steps: 100
   checkpoint_every_steps: 100
   jit: true
+precision:
+  mode: float32
 checkpoint:
   enabled: true
   save_best: true

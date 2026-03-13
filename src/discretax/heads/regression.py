@@ -30,6 +30,7 @@ class RegressionHead(AbstractHead):
         key: PRNGKeyArray,
         *args,
         reduce: bool = True,
+        dtype: jnp.dtype = jnp.float32,
         **kwargs,
     ):
         """Initialize the regression head.
@@ -39,10 +40,16 @@ class RegressionHead(AbstractHead):
             out_features: output features (prediction dimension).
             key: JAX random key for initialization.
             reduce: whether to reduce the time dimension by averaging.
+            dtype: dtype for the linear projection.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
-        self.linear = eqx.nn.Linear(in_features=in_features, out_features=out_features, key=key)
+        self.linear = eqx.nn.Linear(
+            in_features=in_features,
+            out_features=out_features,
+            dtype=dtype,
+            key=key,
+        )
         self.reduce = reduce
 
     def __call__(
@@ -63,6 +70,7 @@ class RegressionHead(AbstractHead):
             the output tensor is of shape (out_features). If reduce is False,
             the output tensor is of shape (timesteps, out_features).
         """
+        x = x.astype(self.linear.weight.dtype)
         # reduce over the time dimension if reduce is True
         if self.reduce:
             x = jnp.mean(x, axis=0)  # shape (timestep, in_features) -> (in_features)

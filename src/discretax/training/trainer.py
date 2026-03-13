@@ -96,6 +96,7 @@ def _classification_metrics(
     log_probs: jax.Array, targets: jax.Array
 ) -> tuple[jax.Array, jax.Array]:
     """Compute classification loss and accuracy."""
+    log_probs = log_probs.astype(jnp.float32)
     loss = -jnp.mean(log_probs[jnp.arange(targets.shape[0]), targets])
     accuracy = jnp.mean(jnp.argmax(log_probs, axis=-1) == targets)
     return loss, accuracy

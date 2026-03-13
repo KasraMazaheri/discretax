@@ -26,6 +26,8 @@ optimizer:
     name: constant
 trainer:
   num_epochs: 5
+precision:
+  mode: float32
 dataset:
   kind: mnist
 model:
@@ -84,8 +86,10 @@ wandb:
     assert config.loader.batch_size == 16
     assert config.trainer.max_steps == 7
     assert config.optimizer.learning_rate == 0.01
+    assert config.precision.mode == "float32"
 
     flattened = flatten_config(config)
     assert flattened["dataset.kind"] == "uea"
     assert flattened["trainer.max_steps"] == 7
+    assert flattened["precision.mode"] == "float32"
     assert flattened["wandb.tags"] == ["ci"]

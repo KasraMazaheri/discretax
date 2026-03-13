@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import jax.random as jr
 from jaxtyping import Array, PRNGKeyArray
 
@@ -54,6 +55,7 @@ class StandardBlock(AbstractBlock):
         channel_mixer: Resolvable[AbstractChannelMixer],
         drop_rate: float = 0.1,
         prenorm: bool = True,
+        dtype: jnp.dtype = jnp.float32,
         **kwargs,
     ):
         """Initialize the Standard block.
@@ -65,16 +67,31 @@ class StandardBlock(AbstractBlock):
             channel_mixer: the channel mixer instance for this block.
             drop_rate: dropout rate for the channel mixer.
             prenorm: whether to apply the normalization at the beginning or the end of the block.
+            dtype: compute dtype for block modules.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
         self.norm = eqx.nn.BatchNorm(
-            input_size=in_features, axis_name="batch", channelwise_affine=False, mode="ema"
+            input_size=in_features,
+            axis_name="batch",
+            channelwise_affine=False,
+            dtype=dtype,
+            mode="ema",
         )
 
         # Build the sequence mixer and channel mixer from the config or an instance.
-        self.sequence_mixer = sequence_mixer.resolve(in_features=in_features, key=key, **kwargs)
-        self.channel_mixer = channel_mixer.resolve(in_features=in_features, key=key, **kwargs)
+        self.sequence_mixer = sequence_mixer.resolve(
+            in_features=in_features,
+            key=key,
+            dtype=dtype,
+            **kwargs,
+        )
+        self.channel_mixer = channel_mixer.resolve(
+            in_features=in_features,
+            key=key,
+            dtype=dtype,
+            **kwargs,
+        )
 
         self.drop = eqx.nn.Dropout(p=drop_rate)
         self.prenorm = prenorm

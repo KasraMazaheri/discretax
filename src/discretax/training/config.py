@@ -45,7 +45,9 @@ def _resolve_default_path(reference: str, current_path: Path) -> Path:
     if not default_path.is_absolute():
         default_path = (current_path.parent / default_path).resolve()
     if not default_path.exists():
-        raise FileNotFoundError(f"Default config '{reference}' resolved to missing path {default_path}")
+        raise FileNotFoundError(
+            f"Default config '{reference}' resolved to missing path {default_path}"
+        )
     return default_path
 
 
@@ -125,6 +127,7 @@ class DataloaderConfig:
     drop_last_train: bool = False
 
     def __post_init__(self) -> None:
+        """Validate dataloader settings."""
         if self.batch_size <= 0:
             raise ValueError("loader.batch_size must be positive")
         if self.eval_batch_size is not None and self.eval_batch_size <= 0:
@@ -151,6 +154,7 @@ class DatasetConfig:
     params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Validate dataset settings."""
         if not 0.0 <= self.validation_split < 1.0:
             raise ValueError("dataset.validation_split must be in the range [0.0, 1.0)")
         if not self.kind:
@@ -170,6 +174,7 @@ class ComponentConfig:
     kwargs: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Validate component settings."""
         if not self.target:
             raise ValueError("component.target must be set")
 
@@ -201,6 +206,7 @@ class ModelConfig:
     head: ComponentConfig
 
     def __post_init__(self) -> None:
+        """Validate model settings."""
         if self.hidden_dim <= 0:
             raise ValueError("model.hidden_dim must be positive")
         if not self.name:
@@ -217,6 +223,7 @@ class ScheduleConfig:
     end_value: float = 0.0
 
     def __post_init__(self) -> None:
+        """Validate schedule settings."""
         supported = {"constant", "cosine_decay", "warmup_cosine_decay"}
         if self.name not in supported:
             raise ValueError(f"optimizer.schedule.name must be one of {sorted(supported)}")
@@ -237,6 +244,7 @@ class OptimizerConfig:
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
 
     def __post_init__(self) -> None:
+        """Validate optimizer settings."""
         supported = {"adam", "adamw", "sgd"}
         if self.name not in supported:
             raise ValueError(f"optimizer.name must be one of {sorted(supported)}")
@@ -259,6 +267,7 @@ class TrainerConfig:
     jit: bool = True
 
     def __post_init__(self) -> None:
+        """Validate trainer settings."""
         if self.num_epochs <= 0:
             raise ValueError("trainer.num_epochs must be positive")
         if self.max_steps is not None and self.max_steps <= 0:
@@ -272,6 +281,19 @@ class TrainerConfig:
 
 
 @dataclass(slots=True)
+class PrecisionConfig:
+    """Precision policy for model parameters and runtime execution."""
+
+    mode: str = "float32"
+
+    def __post_init__(self) -> None:
+        """Validate precision settings."""
+        supported = {"float32", "bfloat16_mixed", "float16_mixed"}
+        if self.mode not in supported:
+            raise ValueError(f"precision.mode must be one of {sorted(supported)}")
+
+
+@dataclass(slots=True)
 class CheckpointConfig:
     """Checkpoint policy for experiments."""
 
@@ -281,6 +303,7 @@ class CheckpointConfig:
     mode: str = "min"
 
     def __post_init__(self) -> None:
+        """Validate checkpoint settings."""
         if self.mode not in {"min", "max"}:
             raise ValueError("checkpoint.mode must be either 'min' or 'max'")
 
@@ -312,6 +335,7 @@ class ExperimentConfig:
     model: ModelConfig
     optimizer: OptimizerConfig
     trainer: TrainerConfig
+    precision: PrecisionConfig
     checkpoint: CheckpointConfig
     wandb: WandbConfig
 
@@ -328,6 +352,7 @@ class ExperimentConfig:
             "model",
             "optimizer",
             "trainer",
+            "precision",
             "checkpoint",
             "wandb",
         }
@@ -355,6 +380,7 @@ class ExperimentConfig:
         schedule = ScheduleConfig(**optimizer_data.pop("schedule", {}))
         optimizer = OptimizerConfig(schedule=schedule, **optimizer_data)
         trainer = TrainerConfig(**data.get("trainer", {}))
+        precision = PrecisionConfig(**data.get("precision", {}))
         checkpoint = CheckpointConfig(**data.get("checkpoint", {}))
         wandb = WandbConfig(**data.get("wandb", {}))
 
@@ -376,6 +402,7 @@ class ExperimentConfig:
             model=model,
             optimizer=optimizer,
             trainer=trainer,
+            precision=precision,
             checkpoint=checkpoint,
             wandb=wandb,
         )
@@ -385,7 +412,9 @@ class ExperimentConfig:
         return asdict(self)
 
 
-def load_experiment_config(path: str | Path, overrides: list[str] | None = None) -> ExperimentConfig:
+def load_experiment_config(
+    path: str | Path, overrides: list[str] | None = None
+) -> ExperimentConfig:
     """Load and validate an experiment config file."""
     raw_config = _resolve_defaults(Path(path), visited=set())
     if overrides:

@@ -131,6 +131,7 @@ The repository now includes a packaged training stack with:
 - hierarchical YAML experiment configs under `configs/`
 - dataset loaders for MNIST, CIFAR-10, and preprocessed UEA datasets
 - an Optax-based Equinox training runtime with checkpoints, JSONL history, run metadata, and diagnostics
+- experiment-level precision mode for LinOSS mixed-precision runs
 - optional Weights & Biases logging with stable run naming and flattened config logging
 
 Helper scripts now live under `scripts/`:
@@ -157,6 +158,14 @@ uv run discretax-train \
   --config configs/experiments/mnist_linoss_smoke.yaml \
   --set trainer.max_steps=10 \
   --set optimizer.learning_rate=0.001
+```
+
+Run LinOSS with the mixed-precision mode:
+
+```bash
+uv run discretax-train \
+  --config configs/experiments/mnist_linoss_smoke.yaml \
+  --set precision.mode=bfloat16_mixed
 ```
 
 Resume training from an existing run directory:

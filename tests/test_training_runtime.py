@@ -4,9 +4,13 @@ import pickle
 from json import loads
 from pathlib import Path
 
+import jax.numpy as jnp
+import jax.random as jr
 import pytest
 
+from discretax.datasets import build_dataset
 from discretax.training import load_experiment_config
+from discretax.training.factory import build_model
 from discretax.training.trainer import run_experiment
 
 
@@ -127,6 +131,67 @@ def test_run_experiment_smoke(tmp_path: Path):
     assert any("grad_norm" in record for record in history_records)
     assert any("step_time_seconds" in record for record in history_records)
     assert any("validation_duration_seconds" in record for record in history_records)
+
+
+def test_run_experiment_bfloat16_precision_policy(tmp_path: Path):
+    """A tiny run can execute with a low-precision runtime policy."""
+    _write_tiny_uea_dataset(tmp_path)
+    config = load_experiment_config(
+        _write_runtime_config(tmp_path, max_steps=2),
+        overrides=[
+            "model.name=linoss",
+            "model.backbone.target=LinOSS",
+            "precision.mode=bfloat16_mixed",
+        ],
+    )
+
+    result = run_experiment(config)
+
+    assert result.final_step == 2
+    assert jnp.isfinite(result.test_loss)
+    assert jnp.isfinite(result.test_accuracy)
+
+
+def test_linoss_mixed_precision_initializes_backbone_in_target_dtype(tmp_path: Path):
+    """LinOSS backbone modules are initialized directly in the mixed compute dtype."""
+    _write_tiny_uea_dataset(tmp_path)
+    config = load_experiment_config(
+        _write_runtime_config(tmp_path, max_steps=2),
+        overrides=[
+            "model.name=linoss",
+            "model.backbone.target=LinOSS",
+            "precision.mode=bfloat16_mixed",
+        ],
+    )
+    dataset_bundle = build_dataset(config.paths, config.dataset)
+    model = build_model(config, dataset_bundle, jr.PRNGKey(0))
+
+    encoder = model.layers[0]
+    backbone = model.layers[1]
+    head = model.layers[2]
+    sequence_mixer = backbone.blocks[0].sequence_mixer
+    channel_mixer = backbone.blocks[0].channel_mixer
+
+    assert encoder.linear.weight.dtype == jnp.bfloat16
+    assert backbone.compute_dtype == jnp.dtype(jnp.bfloat16)
+    assert sequence_mixer.B.dtype == jnp.bfloat16
+    assert sequence_mixer.C.dtype == jnp.bfloat16
+    assert sequence_mixer.D.dtype == jnp.bfloat16
+    assert channel_mixer.w1.weight.dtype == jnp.bfloat16
+    assert channel_mixer.w2.weight.dtype == jnp.bfloat16
+    assert head.linear.weight.dtype == jnp.bfloat16
+
+
+def test_run_experiment_rejects_mixed_precision_for_non_linoss(tmp_path: Path):
+    """Mixed precision is currently rejected for non-LinOSS backbones."""
+    _write_tiny_uea_dataset(tmp_path)
+    config = load_experiment_config(
+        _write_runtime_config(tmp_path, max_steps=2),
+        overrides=["precision.mode=bfloat16_mixed"],
+    )
+
+    with pytest.raises(ValueError, match="only for LinOSS"):
+        run_experiment(config)
 
 
 @pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")
