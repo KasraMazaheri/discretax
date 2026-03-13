@@ -1,0 +1,10 @@
+dataset:
+  kind: cifar10
+  name: cifar10
+  root: cifar10
+  download: true
+  validation_split: 0.1
+  sequence_layout: rows
+  normalize: true
+  seed: 0
+  params: {}

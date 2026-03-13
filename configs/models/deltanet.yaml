@@ -1,0 +1,20 @@
+model:
+  name: deltanet
+  hidden_dim: 64
+  encoder:
+    target: LinearEncoder
+    kwargs:
+      use_bias: false
+  backbone:
+    target: DeltaNet
+    kwargs:
+      num_blocks: 4
+      n_heads: 4
+      head_dim: 16
+      chunk_size: 8
+      drop_rate: 0.1
+      prenorm: true
+  head:
+    target: ClassificationHead
+    kwargs:
+      reduce: true

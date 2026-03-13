@@ -47,8 +47,6 @@ If you don't care about the details, we provide [example notebooks](examples/) t
 
 To join our growing community of JAX and state space model enthusiasts, join our [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white&style=flat-square)](https://discord.gg/VazrGCxeT7) server. Feel free to write us a message (either there or to our personal email, see the bottom of this page) if you have any questions, comments, or just want to say hi!
 
-🤫 Psssst! Rumor has it we are also developing an end-to-end JAX training pipeline. Stay tuned for JAX Lightning. So join the discord server to be the first to hear about our newest project(s)!
-
 ## Installation
 
 [discretax](https://github.com/camail-official/discretax) is available as a PyPI package. To install it via uv, just run
@@ -102,10 +100,57 @@ To include development tooling (pre-commit, Ruff), install:
 uv sync --extra dev
 ```
 
+To install the packaged experiment and training stack (configs, datasets, Optax runtime, W&B logging), run:
+
+```bash
+uv sync --extra train
+```
+
 After installing the development dependencies (activate your environment if needed), enable the git hooks:
 
 ```bash
 uv run pre-commit install
+```
+
+## Experiment Training
+
+The repository now includes a packaged training stack with:
+
+- hierarchical YAML experiment configs under `configs/`
+- dataset loaders for MNIST, CIFAR-10, and preprocessed UEA datasets
+- an Optax-based Equinox training runtime with checkpoints and JSONL history
+- optional Weights & Biases logging with stable run naming and flattened config logging
+
+Print a fully resolved config:
+
+```bash
+uv run discretax-train --config configs/experiments/mnist_linoss_smoke.yaml --print-config
+```
+
+Run a configured experiment:
+
+```bash
+uv run discretax-train --config configs/experiments/mnist_linoss_smoke.yaml
+```
+
+Override config values from the command line with dotted assignments:
+
+```bash
+uv run discretax-train \
+  --config configs/experiments/mnist_linoss_smoke.yaml \
+  --set trainer.max_steps=10 \
+  --set optimizer.learning_rate=0.001
+```
+
+UEA support expects the preprocessed split layout used in the sibling `linoss` repositories:
+
+```text
+<data_root>/processed/UEA/<dataset_name>/X_train.pkl
+<data_root>/processed/UEA/<dataset_name>/y_train.pkl
+<data_root>/processed/UEA/<dataset_name>/X_val.pkl
+<data_root>/processed/UEA/<dataset_name>/y_val.pkl
+<data_root>/processed/UEA/<dataset_name>/X_test.pkl
+<data_root>/processed/UEA/<dataset_name>/y_test.pkl
 ```
 
 ## Supported Models

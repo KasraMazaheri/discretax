@@ -1,0 +1,11 @@
+dataset:
+  kind: uea
+  name: EigenWorms
+  root: UEA
+  download: false
+  validation_split: 0.0
+  sequence_layout: time_major
+  normalize: true
+  seed: 0
+  params:
+    include_time: false

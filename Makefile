@@ -4,7 +4,7 @@
 # =============================
 
 # Declare all targets as phony (not actual files)
-.PHONY: help clean format git-sync test-full install install-dev install-cuda install-examples install-docs install-all clean-env remake-lockfile
+.PHONY: help clean format git-sync test-full install install-dev install-train install-cuda install-examples install-docs install-all clean-env remake-lockfile
 
 # Default target - show help when just running 'make'
 .DEFAULT_GOAL := help
@@ -35,6 +35,9 @@ install: ## Install dependencies from `pyproject.toml`
 
 install-dev: ## Install development dependencies from `pyproject.toml`
 	uv sync --extra dev
+
+install-train: ## Install training/runtime dependencies from `pyproject.toml`
+	uv sync --extra train
 
 install-cuda: ## Install dependencies with CUDA support
 	uv sync --extra cu12

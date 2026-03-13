@@ -28,8 +28,6 @@ If you don't care about the details, we provide [example notebooks](examples/01_
 
 To join our growing community of JAX and state space model enthusiasts, join our [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?&logo=discord&logoColor=white&style=flat-square)](https://discord.gg/VazrGCxeT7) server. Feel free to write us a message (either there or to our personal email, see the bottom of this page) if you have any questions, comments, or just want to say hi!
 
-🤫 Psssst! Rumor has it we are also developing an end-to-end JAX training pipeline. Stay tuned for JAX Lightning. So join the discord server to be the first to hear about our newest project(s)!
-
 ## Installation
 [discretax](https://github.com/camail-official/discretax) is available as a PyPI package. To install it via uv, just run
 ```bash

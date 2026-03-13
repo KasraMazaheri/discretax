@@ -7,11 +7,11 @@ from typing import Any
 import jax.random as jr
 
 import discretax
-from discretax.utils import print_param_tree
 from discretax.utils.config_mixin import Partial, PartialModule
+from discretax.utils.param_count import print_param_tree
 
 
-def _resolve_target(target: str) -> type:
+def resolve_target(target: str) -> type:
     """Resolve a target string to a class, searching discretax submodules if needed."""
     if "." in target:
         module_path, class_name = target.rsplit(".", 1)
@@ -40,8 +40,10 @@ def build_from_dict(cfg: dict[str, Any]) -> PartialModule:
     if isinstance(cfg, dict) and "target" in cfg:
         target = cfg["target"]
         kwargs = {k: build_from_dict(v) for k, v in cfg.items() if k != "target"}
-        target_cls = _resolve_target(target)
+        target_cls = resolve_target(target)
         return Partial(target_cls, **kwargs)
+    elif isinstance(cfg, list):
+        return [build_from_dict(value) for value in cfg]
     elif isinstance(cfg, dict):
         return {k: build_from_dict(v) for k, v in cfg.items()}
     else:
