@@ -233,6 +233,7 @@ dependencies = [
     { name = "equinox" },
     { name = "jax" },
     { name = "jaxtyping" },
+    { name = "sympy" },
 ]
 
 [package.optional-dependencies]
@@ -308,6 +309,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.11" },
     { name = "scikit-learn", marker = "extra == 'data'", specifier = ">=1.7.2" },
     { name = "sktime", marker = "extra == 'data'", specifier = ">=0.39.0" },
+    { name = "sympy", specifier = ">=1.12" },
     { name = "torch", marker = "extra == 'examples'", specifier = ">=2.6.0" },
     { name = "torch", marker = "extra == 'train'", specifier = ">=2.6.0" },
     { name = "torchvision", marker = "extra == 'examples'", specifier = ">=0.24.0" },
