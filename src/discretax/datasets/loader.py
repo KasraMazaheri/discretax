@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from discretax.datasets.base import DatasetSplit
+from discretax.datasets.images import apply_image_batch_pipeline
 
 
 def count_batches(dataset_split: DatasetSplit, batch_size: int, *, drop_last: bool) -> int:
@@ -33,8 +34,8 @@ def batch_iterator(
         raise ValueError("batch_size must be positive")
 
     indices = np.arange(len(dataset_split))
+    rng = np.random.default_rng(seed)
     if shuffle:
-        rng = np.random.default_rng(seed)
         rng.shuffle(indices)
 
     stop = len(indices) if not drop_last else len(indices) - (len(indices) % batch_size)
@@ -42,7 +43,14 @@ def batch_iterator(
         batch_indices = indices[start : start + batch_size]
         if len(batch_indices) < batch_size and drop_last:
             continue
+        batch_inputs = np.asarray(dataset_split.inputs[batch_indices])
+        if dataset_split.metadata:
+            batch_inputs = apply_image_batch_pipeline(
+                batch_inputs,
+                dataset_split.metadata,
+                rng=rng,
+            )
         yield (
-            jnp.asarray(dataset_split.inputs[batch_indices]),
+            jnp.asarray(batch_inputs),
             jnp.asarray(dataset_split.targets[batch_indices]),
         )

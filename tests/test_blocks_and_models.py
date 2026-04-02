@@ -5,7 +5,7 @@ import jax
 import jax.random as jr
 import pytest
 
-from discretax.encoder import LinearEncoder
+from discretax.encoder import ImagePatchEncoder, LinearEncoder
 from discretax.heads.classification import ClassificationHead
 from discretax.models import LRU, S5, DeltaNet, LinOSS
 
@@ -206,3 +206,30 @@ def test_linoss_model_rejects_invalid_head_partition():
 
     with pytest.raises(ValueError, match="state_dim=30 must be divisible by num_heads=4"):
         LinOSS(hidden_dim=16, state_dim=30, num_heads=4, key=jr.PRNGKey(6))
+
+
+def test_image_patch_encoder_with_linoss_forward():
+    """An image patch encoder composes cleanly with LinOSS and a classifier head."""
+    key = jr.PRNGKey(7)
+    keys = jr.split(key, 3)
+
+    encoder = ImagePatchEncoder(
+        key=keys[0],
+        out_features=16,
+        image_shape=(8, 8, 3),
+        patch_size=4,
+    )
+    linoss_model = LinOSS(hidden_dim=16, num_blocks=2, state_dim=16, drop_rate=0.0, key=keys[1])
+    head = ClassificationHead(in_features=16, out_features=3, key=keys[2])
+    model = eqx.nn.Sequential([encoder, linoss_model, head])
+
+    x = _dummy_input(batch_size=2, timesteps=8, in_features=24)
+    state = _dummy_state(model, batch_size=2)
+
+    def single_forward(x_single, key_single):
+        return model(x_single, state, key=key_single)
+
+    batched_forward = jax.vmap(single_forward, in_axes=(0, 0), axis_name="batch")
+    y, _ = batched_forward(x, jr.split(jr.PRNGKey(8), 2))
+
+    assert y.shape == (2, 3)

@@ -1,0 +1,23 @@
+defaults:
+  - ./cifar10_linoss_strong
+
+name: discretax_cifar10_heads_strong2
+description: CIFAR-10 LinOSS strong head-sweep base with the image stem and augmented dataset path.
+tags:
+  - LinOSS
+  - Cifar10
+  - image-stem
+  - cosine
+  - augmentation
+  - heads
+  - projection
+wandb:
+  group: discretax_cifar10_heads_strong2
+  tags:
+    - LinOSS
+    - Cifar10
+    - image-stem
+    - cosine
+    - augmentation
+    - heads
+    - projection

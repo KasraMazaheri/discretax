@@ -109,6 +109,7 @@ def save_checkpoint(
     checkpoint_name: str,
     *,
     model: Any,
+    ema_model: Any | None = None,
     state: Any,
     opt_state: Any,
     metadata: dict[str, Any],
@@ -117,6 +118,8 @@ def save_checkpoint(
     checkpoint_dir = output_dir / "checkpoints" / checkpoint_name
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     eqx.tree_serialise_leaves(checkpoint_dir / "model.eqx", model)
+    if ema_model is not None:
+        eqx.tree_serialise_leaves(checkpoint_dir / "ema_model.eqx", ema_model)
     eqx.tree_serialise_leaves(checkpoint_dir / "state.eqx", state)
     eqx.tree_serialise_leaves(checkpoint_dir / "opt_state.eqx", opt_state)
     with (checkpoint_dir / "metadata.json").open("w", encoding="utf-8") as file:
@@ -128,14 +131,22 @@ def load_checkpoint(
     checkpoint_dir: str | Path,
     *,
     model_like: Any,
+    ema_model_like: Any | None = None,
     state_like: Any,
     opt_state_like: Any,
-) -> tuple[Any, Any, Any, dict[str, Any]]:
+) -> tuple[Any, Any, Any | None, Any, dict[str, Any]]:
     """Load a checkpoint bundle into pre-built PyTree templates."""
     checkpoint_dir = Path(checkpoint_dir)
     model = eqx.tree_deserialise_leaves(checkpoint_dir / "model.eqx", model_like)
+    ema_model_path = checkpoint_dir / "ema_model.eqx"
+    if ema_model_like is None:
+        ema_model = None
+    elif ema_model_path.exists():
+        ema_model = eqx.tree_deserialise_leaves(ema_model_path, ema_model_like)
+    else:
+        ema_model = ema_model_like
     state = eqx.tree_deserialise_leaves(checkpoint_dir / "state.eqx", state_like)
     opt_state = eqx.tree_deserialise_leaves(checkpoint_dir / "opt_state.eqx", opt_state_like)
     with (checkpoint_dir / "metadata.json").open("r", encoding="utf-8") as file:
         metadata = json.load(file)
-    return model, state, opt_state, metadata
+    return model, ema_model, state, opt_state, metadata

@@ -1,0 +1,80 @@
+defaults:
+  - ../base
+  - ../datasets/cifar10_augmented
+  - ../models/linoss_image_patch
+
+name: cifar10-linoss-strong2
+description: CIFAR-10 LinOSS config with a stronger optimizer recipe, dataset pipeline, and image stem.
+tags:
+  - LinOSS
+  - Cifar10
+  - image-stem
+  - cosine
+  - augmentation
+loader:
+  batch_size: 128
+  eval_batch_size: 256
+optimizer:
+  name: adamw
+  learning_rate: 0.0003
+  weight_decay: 0.03
+  weight_decay_mask: exclude_1d_params
+  grad_clip_norm: 1.0
+  schedule:
+    name: warmup_cosine_decay
+    warmup_steps: 1000
+    decay_steps: 100000
+    end_value: 0.00001
+regularization:
+  label_smoothing: 0.1
+  mix_augmentation_prob: 1.0
+  mixup_alpha: 0.8
+  cutmix_alpha: 1.0
+  cutmix_switch_prob: 0.5
+ema:
+  enabled: true
+  decay: 0.9999
+model:
+  name: linoss
+  hidden_dim: 256
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 4
+      state_dim: 256
+      drop_rate: 0.1
+      num_heads: 1
+      use_head_gating: false
+      use_head_output_projection: false
+      prenorm: true
+      discretization: IM
+      damping: false
+      r_min: 0.9
+      theta_max: 3.141592653589793
+  head:
+    target: ClassificationHead
+    kwargs:
+      reduce: true
+trainer:
+  seed: 0
+  num_epochs: 300
+  max_steps: 100000
+  log_every_steps: 100
+  eval_every_steps: 500
+  checkpoint_every_steps: 4000
+precision:
+  mode: float32
+wandb:
+  enabled: true
+  mode: online
+  project: damped-linoss
+  group: discretax_cifar10_strong2
+  job_type: train
+  tags:
+    - LinOSS
+    - Cifar10
+    - image-stem
+    - cosine
+    - augmentation
+    - mixup-cutmix
+    - ema

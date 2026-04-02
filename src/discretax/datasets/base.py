@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -13,8 +14,10 @@ class DatasetSplit:
 
     inputs: np.ndarray
     targets: np.ndarray
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Validate that inputs and targets have matching batch sizes."""
         if self.inputs.shape[0] != self.targets.shape[0]:
             raise ValueError("Dataset inputs and targets must have the same leading dimension")
 
@@ -35,4 +38,4 @@ class DatasetBundle:
     input_dim: int
     num_classes: int
     sequence_length: int
-
+    metadata: dict[str, Any] = field(default_factory=dict)

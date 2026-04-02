@@ -8,6 +8,11 @@ from pathlib import Path
 import numpy as np
 
 from discretax.datasets.base import DatasetBundle, DatasetSplit
+from discretax.datasets.images import (
+    CIFAR10_CHANNEL_MEAN,
+    CIFAR10_CHANNEL_STD,
+    pack_image_sequences,
+)
 from discretax.training.config import DatasetConfig, PathsConfig
 
 
@@ -65,18 +70,28 @@ def _standardize_with_train_stats(
     return _normalize(train_split), _normalize(validation_split), _normalize(test_split)
 
 
-def _prepare_image_sequences(images: np.ndarray, layout: str) -> np.ndarray:
-    """Convert image tensors into sequence-major arrays."""
-    images = images.astype(np.float32)
-    if images.ndim == 3:
-        images = images[..., None]
-
-    num_examples, height, width, channels = images.shape
-    if layout == "rows":
-        return images.reshape(num_examples, height, width * channels)
-    if layout == "pixels":
-        return images.reshape(num_examples, height * width, channels)
-    raise ValueError(f"Unsupported image sequence layout: {layout}")
+def _image_split_metadata(
+    *,
+    image_shape: tuple[int, int, int],
+    sequence_layout: str,
+    rescale: float | None,
+    mean: np.ndarray | None = None,
+    std: np.ndarray | None = None,
+    augmentations: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build image preprocessing metadata for a dataset split."""
+    metadata: dict[str, object] = {
+        "image_shape": image_shape,
+        "sequence_layout": sequence_layout,
+    }
+    if rescale is not None:
+        metadata["rescale"] = rescale
+    if mean is not None and std is not None:
+        metadata["mean"] = mean.tolist()
+        metadata["std"] = std.tolist()
+    if augmentations:
+        metadata["augmentations"] = augmentations
+    return metadata
 
 
 def _build_mnist_dataset(
@@ -89,15 +104,19 @@ def _build_mnist_dataset(
     train_dataset = MNIST(root=dataset_path, train=True, download=dataset_config.download)
     test_dataset = MNIST(root=dataset_path, train=False, download=dataset_config.download)
 
-    train_inputs = _prepare_image_sequences(
+    train_inputs = pack_image_sequences(
         np.asarray(train_dataset.data), dataset_config.sequence_layout
     )
-    test_inputs = _prepare_image_sequences(
+    test_inputs = pack_image_sequences(
         np.asarray(test_dataset.data), dataset_config.sequence_layout
     )
-    if dataset_config.normalize:
-        train_inputs /= 255.0
-        test_inputs /= 255.0
+
+    image_shape = (int(train_dataset.data.shape[1]), int(train_dataset.data.shape[2]), 1)
+    image_metadata = _image_split_metadata(
+        image_shape=image_shape,
+        sequence_layout=dataset_config.sequence_layout,
+        rescale=1.0 / 255.0 if dataset_config.normalize else None,
+    )
 
     train_targets = np.asarray(train_dataset.targets, dtype=np.int32)
     test_targets = np.asarray(test_dataset.targets, dtype=np.int32)
@@ -107,7 +126,21 @@ def _build_mnist_dataset(
         dataset_config.validation_split,
         dataset_config.seed,
     )
-    test_split = DatasetSplit(test_inputs.astype(np.float32), test_targets)
+    train_split = DatasetSplit(
+        train_split.inputs.astype(np.float32),
+        train_split.targets,
+        image_metadata,
+    )
+    validation_split = DatasetSplit(
+        validation_split.inputs.astype(np.float32),
+        validation_split.targets,
+        dict(image_metadata),
+    )
+    test_split = DatasetSplit(
+        test_inputs.astype(np.float32),
+        test_targets,
+        dict(image_metadata),
+    )
 
     return DatasetBundle(
         name=dataset_config.resolved_name,
@@ -118,6 +151,10 @@ def _build_mnist_dataset(
         input_dim=int(train_split.inputs.shape[-1]),
         num_classes=10,
         sequence_length=int(train_split.inputs.shape[1]),
+        metadata={
+            "image_shape": image_shape,
+            "sequence_layout": dataset_config.sequence_layout,
+        },
     )
 
 
@@ -131,15 +168,28 @@ def _build_cifar10_dataset(
     train_dataset = CIFAR10(root=dataset_path, train=True, download=dataset_config.download)
     test_dataset = CIFAR10(root=dataset_path, train=False, download=dataset_config.download)
 
-    train_inputs = _prepare_image_sequences(
+    train_inputs = pack_image_sequences(
         np.asarray(train_dataset.data), dataset_config.sequence_layout
     )
-    test_inputs = _prepare_image_sequences(
+    test_inputs = pack_image_sequences(
         np.asarray(test_dataset.data), dataset_config.sequence_layout
     )
-    if dataset_config.normalize:
-        train_inputs /= 255.0
-        test_inputs /= 255.0
+
+    image_shape = tuple(int(value) for value in train_dataset.data.shape[1:])
+    train_augmentations = dataset_config.params.get("augmentations", {})
+    normalization_name = dataset_config.params.get("normalization")
+    normalization_stats = (
+        (CIFAR10_CHANNEL_MEAN, CIFAR10_CHANNEL_STD)
+        if dataset_config.normalize and normalization_name == "cifar10_channelwise"
+        else (None, None)
+    )
+    base_metadata = _image_split_metadata(
+        image_shape=image_shape,
+        sequence_layout=dataset_config.sequence_layout,
+        rescale=1.0 / 255.0 if dataset_config.normalize else None,
+        mean=normalization_stats[0],
+        std=normalization_stats[1],
+    )
 
     train_targets = np.asarray(train_dataset.targets, dtype=np.int32)
     test_targets = np.asarray(test_dataset.targets, dtype=np.int32)
@@ -149,7 +199,24 @@ def _build_cifar10_dataset(
         dataset_config.validation_split,
         dataset_config.seed,
     )
-    test_split = DatasetSplit(test_inputs.astype(np.float32), test_targets)
+    train_split = DatasetSplit(
+        train_split.inputs.astype(np.float32),
+        train_split.targets,
+        {
+            **base_metadata,
+            **({"augmentations": train_augmentations} if train_augmentations else {}),
+        },
+    )
+    validation_split = DatasetSplit(
+        validation_split.inputs.astype(np.float32),
+        validation_split.targets,
+        dict(base_metadata),
+    )
+    test_split = DatasetSplit(
+        test_inputs.astype(np.float32),
+        test_targets,
+        dict(base_metadata),
+    )
 
     return DatasetBundle(
         name=dataset_config.resolved_name,
@@ -160,6 +227,10 @@ def _build_cifar10_dataset(
         input_dim=int(train_split.inputs.shape[-1]),
         num_classes=10,
         sequence_length=int(train_split.inputs.shape[1]),
+        metadata={
+            "image_shape": image_shape,
+            "sequence_layout": dataset_config.sequence_layout,
+        },
     )
 
 

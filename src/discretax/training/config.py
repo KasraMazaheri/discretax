@@ -240,6 +240,7 @@ class OptimizerConfig:
     name: str = "adamw"
     learning_rate: float = 3e-4
     weight_decay: float = 0.0
+    weight_decay_mask: str = "all"
     grad_clip_norm: float | None = None
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
 
@@ -250,8 +251,50 @@ class OptimizerConfig:
             raise ValueError(f"optimizer.name must be one of {sorted(supported)}")
         if self.learning_rate <= 0:
             raise ValueError("optimizer.learning_rate must be positive")
+        supported_masks = {"all", "exclude_1d_params"}
+        if self.weight_decay_mask not in supported_masks:
+            raise ValueError(
+                f"optimizer.weight_decay_mask must be one of {sorted(supported_masks)}"
+            )
         if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
             raise ValueError("optimizer.grad_clip_norm must be positive when provided")
+
+
+@dataclass(slots=True)
+class RegularizationConfig:
+    """Training-time classification regularization configuration."""
+
+    label_smoothing: float = 0.0
+    mix_augmentation_prob: float = 0.0
+    mixup_alpha: float = 0.0
+    cutmix_alpha: float = 0.0
+    cutmix_switch_prob: float = 0.5
+
+    def __post_init__(self) -> None:
+        """Validate regularization settings."""
+        if not 0.0 <= self.label_smoothing < 1.0:
+            raise ValueError("regularization.label_smoothing must be in [0.0, 1.0)")
+        if not 0.0 <= self.mix_augmentation_prob <= 1.0:
+            raise ValueError("regularization.mix_augmentation_prob must be in [0.0, 1.0]")
+        if self.mixup_alpha < 0.0:
+            raise ValueError("regularization.mixup_alpha must be non-negative")
+        if self.cutmix_alpha < 0.0:
+            raise ValueError("regularization.cutmix_alpha must be non-negative")
+        if not 0.0 <= self.cutmix_switch_prob <= 1.0:
+            raise ValueError("regularization.cutmix_switch_prob must be in [0.0, 1.0]")
+
+
+@dataclass(slots=True)
+class EMAConfig:
+    """Exponential moving average model tracking."""
+
+    enabled: bool = False
+    decay: float = 0.9999
+
+    def __post_init__(self) -> None:
+        """Validate EMA settings."""
+        if not 0.0 < self.decay < 1.0:
+            raise ValueError("ema.decay must be in the open interval (0.0, 1.0)")
 
 
 @dataclass(slots=True)
@@ -334,6 +377,8 @@ class ExperimentConfig:
     dataset: DatasetConfig
     model: ModelConfig
     optimizer: OptimizerConfig
+    regularization: RegularizationConfig
+    ema: EMAConfig
     trainer: TrainerConfig
     precision: PrecisionConfig
     checkpoint: CheckpointConfig
@@ -351,6 +396,8 @@ class ExperimentConfig:
             "dataset",
             "model",
             "optimizer",
+            "regularization",
+            "ema",
             "trainer",
             "precision",
             "checkpoint",
@@ -379,6 +426,8 @@ class ExperimentConfig:
         optimizer_data = dict(data.get("optimizer", {}))
         schedule = ScheduleConfig(**optimizer_data.pop("schedule", {}))
         optimizer = OptimizerConfig(schedule=schedule, **optimizer_data)
+        regularization = RegularizationConfig(**data.get("regularization", {}))
+        ema = EMAConfig(**data.get("ema", {}))
         trainer = TrainerConfig(**data.get("trainer", {}))
         precision = PrecisionConfig(**data.get("precision", {}))
         checkpoint = CheckpointConfig(**data.get("checkpoint", {}))
@@ -401,6 +450,8 @@ class ExperimentConfig:
             dataset=dataset,
             model=model,
             optimizer=optimizer,
+            regularization=regularization,
+            ema=ema,
             trainer=trainer,
             precision=precision,
             checkpoint=checkpoint,

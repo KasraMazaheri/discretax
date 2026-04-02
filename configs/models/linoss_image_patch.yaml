@@ -1,0 +1,10 @@
+defaults:
+  - ./linoss
+
+model:
+  encoder:
+    target: ImagePatchEncoder
+    kwargs:
+      patch_size: 4
+      use_bias: false
+      use_layer_norm: true

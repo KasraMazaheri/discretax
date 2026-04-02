@@ -62,8 +62,14 @@ loader:
 optimizer:
   name: adam
   learning_rate: 0.001
+  weight_decay_mask: exclude_1d_params
   schedule:
     name: constant
+regularization:
+  label_smoothing: 0.1
+ema:
+  enabled: true
+  decay: 0.99
 trainer:
   seed: 0
   num_epochs: 2
@@ -129,6 +135,7 @@ def test_run_experiment_smoke(tmp_path: Path):
         for line in (result.output_dir / "history.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert any("grad_norm" in record for record in history_records)
+    assert any("mix_augmentation_lambda" in record for record in history_records)
     assert any("step_time_seconds" in record for record in history_records)
     assert any("validation_duration_seconds" in record for record in history_records)
 
@@ -238,8 +245,13 @@ def test_run_experiment_eval_only_from_run_directory(tmp_path: Path):
     run_metadata = loads(
         (eval_result.output_dir / "run_metadata.json").read_text(encoding="utf-8")
     )
+    restored_metadata = loads(
+        (train_result.output_dir / "checkpoints" / "best" / "metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert summary["mode"] == "eval_only"
-    assert summary["restored_step"] == 2
+    assert summary["restored_step"] == restored_metadata["step"]
     assert summary["duration_seconds"] >= 0.0
     assert run_metadata["mode"] == "eval_only"
     assert run_metadata["restored_checkpoint"].endswith("/checkpoints/best")
