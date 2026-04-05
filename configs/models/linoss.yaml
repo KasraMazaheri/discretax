@@ -16,9 +16,11 @@ model:
       drop_rate: 0.1
       prenorm: true
       discretization: IMEX
-      initialization: AG
+      initialization: RT
+      damping: true
+      stability: stable
       r_min: 0.9
-      theta_max: 3.14159
+      theta_max: 1.047 # pi / 3
       A_max: 1.0
       G_max: 1.0
   head:
