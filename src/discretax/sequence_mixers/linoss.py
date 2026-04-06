@@ -90,10 +90,12 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
 
     Parameters are projected into a stable region at each forward pass via
     `_project_ag_oscillatory` ("oscillatory") or `_project_ag_stability` ("stable").
+
+    If damping=false, G_diag always set to zero with no gradient flow.
     """
 
     A_diag: jax.Array
-    G_diag: jax.Array | None
+    G_diag: jax.Array
     B: jax.Array
     C: jax.Array
     D: jax.Array
@@ -195,21 +197,19 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
                 raise NotImplementedError(f"Initialization {initialization} not implemented")
 
         self.A_diag = A_flat.reshape(num_heads, self.head_state_dim)
-        self.G_diag = (
-            G_flat.reshape(num_heads, self.head_state_dim) if G_flat is not None else None
-        )
+        self.G_diag = G_flat.reshape(num_heads, self.head_state_dim)
         self.steps = steps_flat.reshape(num_heads, self.head_state_dim)
 
         self.B = _simple_uniform_init(
             nxt(),
             shape=(num_heads, self.head_state_dim, self.head_hidden_dim, 2),
-            std=1.0 / math.sqrt(self.head_hidden_dim),
+            half_width=1.0 / math.sqrt(self.head_hidden_dim),
             dtype=dtype,
         )
         self.C = _simple_uniform_init(
             nxt(),
             shape=(num_heads, self.head_hidden_dim, self.head_state_dim, 2),
-            std=1.0 / math.sqrt(self.head_state_dim),
+            half_width=1.0 / math.sqrt(self.head_state_dim),
             dtype=dtype,
         )
         self.D = normal(stddev=1.0)(nxt(), (num_heads, self.head_hidden_dim), dtype=dtype)
@@ -244,10 +244,10 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
 
     def _apply_multi_head(self, x: Array, steps: Array) -> Array:
         """Apply independent LinOSS heads and merge them back into the hidden stream."""
-        G_raw = self.G_diag if self.damping else jnp.zeros_like(self.A_diag)
+        G_diag = self.G_diag if self.damping else jnp.zeros_like(self.G_diag)
         x_heads = x.reshape(x.shape[0], self.num_heads, self.head_hidden_dim)
         scan_inputs = jnp.swapaxes(x_heads, 0, 1)
-        ys = jax.vmap(self._apply_recurrence)(self.A_diag, G_raw, self.B, scan_inputs, steps)
+        ys = jax.vmap(self._apply_recurrence)(self.A_diag, G_diag, self.B, scan_inputs, steps)
         ys = jnp.swapaxes(ys, 0, 1)  # (L, num_heads, head_state_dim) complex
 
         C_complex = self.C[..., 0] + 1j * self.C[..., 1]
@@ -267,16 +267,16 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
     def _apply_recurrence(
         self,
         A_diag: Array,
-        G_raw: Array,
+        G_diag: Array,
         B: Array,
         x: Array,
         steps: Array,
     ) -> Array:
         """Apply one head's LinOSS recurrence. Returns (L, head_state_dim) complex."""
         if self.stability == "oscillatory":
-            A, G = _project_ag_oscillatory(self.discretization, A_diag, G_raw, steps)
+            A, G = _project_ag_oscillatory(self.discretization, A_diag, G_diag, steps)
         else:
-            A, G = _project_ag_stability(self.discretization, A_diag, G_raw, steps)
+            A, G = _project_ag_stability(self.discretization, A_diag, G_diag, steps)
         mat_fn = MATRIX_FNS[self.discretization]
         B_complex = B[..., 0] + 1j * B[..., 1]
         return _apply_linoss(mat_fn, A, G, B_complex, x, steps)
@@ -288,21 +288,22 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
 def _simple_uniform_init(
     rng: PRNGKeyArray,
     shape: tuple[int],
-    std: float = 1.0,
+    half_width: float = 1.0,
     dtype: jnp.dtype = jnp.float32,
 ):
-    """Simple uniform initialization.
+    """Simple uniform initialization over [-half_width, half_width].
 
     Args:
         rng: JAX random key for initialization.
         shape: Shape of the weights.
-        std: Standard deviation of the weight initialization.
+        half_width: Half-width of the uniform distribution (weights sampled from
+            [-half_width, half_width]).
         dtype: dtype of the initialized weights.
 
     Returns:
         Weights initialized using a simple uniform distribution.
     """
-    weights = random.uniform(rng, shape, dtype=dtype) * 2.0 * std - std
+    weights = random.uniform(rng, shape, dtype=dtype) * 2.0 * half_width - half_width
     return weights
 
 
@@ -315,7 +316,7 @@ def _init_linoss(
 ):
     """Initialize recurrence parameters for undamped LinOSS.
 
-    Samples A_diag uniformly in [A_min, A_max]. G_diag is set to None.
+    Samples A_diag uniformly in [A_min, A_max]. G_diag is set to zeros.
 
     Args:
         rng: JAX random key for initialization.
@@ -330,7 +331,7 @@ def _init_linoss(
     A_key, step_key = jr.split(rng, 2)
     A_diag = (A_min + random.uniform(A_key, shape=(state_dim,)) * (A_max - A_min)).astype(dtype)
     steps = normal(stddev=0.5)(step_key, (state_dim,), dtype=dtype)
-    return A_diag, None, steps
+    return A_diag, jnp.zeros_like(A_diag), steps
 
 
 def _init_damped_linoss_ag(
