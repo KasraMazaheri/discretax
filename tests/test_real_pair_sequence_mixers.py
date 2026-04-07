@@ -11,6 +11,11 @@ import pytest
 from discretax.sequence_mixers.linoss import LinOSSSequenceMixer
 
 
+def _single_head_array(array: jax.Array) -> jax.Array:
+    """Return a single-head view that supports both legacy and unified-head layouts."""
+    return array[0] if array.ndim >= 2 and array.shape[0] == 1 else array
+
+
 @jax.vmap
 def _linoss_binary_operator_reference(q_i, q_j):  # noqa: N802
     A_i, b_i = q_i
@@ -104,28 +109,31 @@ def _apply_damped_linoss_imex_reference(A_diag, G_diag, B_complex, x, step):  # 
 
 
 def _linoss_reference(mixer: LinOSSSequenceMixer, x: jax.Array) -> jax.Array:
-    steps = jax.nn.sigmoid(mixer.steps)
-    B_complex = mixer.B[..., 0] + 1j * mixer.B[..., 1]
-    C_complex = mixer.C[..., 0] + 1j * mixer.C[..., 1]
+    steps = jax.nn.sigmoid(_single_head_array(mixer.steps))
+    B_complex = _single_head_array(mixer.B[..., 0] + 1j * mixer.B[..., 1])
+    C_complex = _single_head_array(mixer.C[..., 0] + 1j * mixer.C[..., 1])
+    D = _single_head_array(mixer.D)
+    A_param = _single_head_array(mixer.A_diag)
+    G_param = _single_head_array(mixer.G_diag)
 
     if mixer.discretization == "IM":
-        A_diag = jax.nn.relu(mixer.A_diag)
+        A_diag = jax.nn.relu(A_param)
         ys = _apply_linoss_im_reference(A_diag, B_complex, x, steps)
     elif mixer.damping:
-        G_diag = jax.nn.relu(mixer.G_diag)
+        G_diag = jax.nn.relu(G_param)
         A_boundary_low = (2 + steps * G_diag - 2 * jnp.sqrt(1 + steps * G_diag)) / steps**2
         A_boundary_high = (2 + steps * G_diag + 2 * jnp.sqrt(1 + steps * G_diag)) / steps**2
         A_diag = (
             A_boundary_low
-            + jax.nn.relu(mixer.A_diag - A_boundary_low)
-            - jax.nn.relu(mixer.A_diag - A_boundary_high)
+            + jax.nn.relu(A_param - A_boundary_low)
+            - jax.nn.relu(A_param - A_boundary_high)
         )
         ys = _apply_damped_linoss_imex_reference(A_diag, G_diag, B_complex, x, steps)
     else:
-        A_diag = jax.nn.relu(mixer.A_diag)
+        A_diag = jax.nn.relu(A_param)
         ys = _apply_linoss_imex_reference(A_diag, B_complex, x, steps)
 
-    return jax.vmap(lambda hidden, inputs: (C_complex @ hidden).real + mixer.D * inputs)(ys, x)
+    return jax.vmap(lambda hidden, inputs: (C_complex @ hidden).real + D * inputs)(ys, x)
 
 
 def _assert_no_complex_leaves(module: eqx.Module) -> None:
@@ -199,8 +207,8 @@ def test_linoss_multihead_variants_execute(
 
 
 def test_linoss_single_head_flags_preserve_original_path():
-    """Single-head LinOSS ignores gating/projection flags and keeps the legacy shapes."""
-    mixer = LinOSSSequenceMixer(
+    """Single-head LinOSS ignores gating/projection flags and preserves semantics."""
+    keyed = LinOSSSequenceMixer(
         in_features=6,
         state_dim=8,
         num_heads=1,
@@ -208,12 +216,28 @@ def test_linoss_single_head_flags_preserve_original_path():
         use_head_output_projection=True,
         key=jr.PRNGKey(12),
     )
+    plain = LinOSSSequenceMixer(
+        in_features=6,
+        state_dim=8,
+        num_heads=1,
+        use_head_gating=False,
+        use_head_output_projection=False,
+        key=jr.PRNGKey(12),
+    )
+    x = jr.normal(jr.PRNGKey(13), (5, 6))
 
-    assert mixer.B.shape == (8, 6, 2)
-    assert mixer.C.shape == (6, 8, 2)
-    assert mixer.D.shape == (6,)
-    assert mixer.head_gate is None
-    assert mixer.head_output_projection is None
+    assert keyed.B.shape == (1, 8, 6, 2)
+    assert keyed.C.shape == (1, 6, 8, 2)
+    assert keyed.D.shape == (1, 6)
+    assert keyed.head_gate is None
+    assert keyed.head_output_projection is None
+    assert jnp.array_equal(keyed.A_diag, plain.A_diag)
+    assert jnp.array_equal(keyed.G_diag, plain.G_diag)
+    assert jnp.array_equal(keyed.steps, plain.steps)
+    assert jnp.array_equal(keyed.B, plain.B)
+    assert jnp.array_equal(keyed.C, plain.C)
+    assert jnp.array_equal(keyed.D, plain.D)
+    assert jnp.allclose(keyed(x, key=jr.PRNGKey(14)), plain(x, key=jr.PRNGKey(14)))
 
 
 def test_linoss_multihead_requires_divisible_dimensions():
