@@ -1,7 +1,7 @@
 base_config: configs/experiments/cifar10_linoss_head_sweep_strong.yaml
 
 run_name:
-  prefix: discretax_cifar10_heads_strong_im
+  prefix: discretax_cifar10_heads_strong_damped
   include_keys:
     - trainer.seed
     - model.backbone.kwargs.num_heads
@@ -12,7 +12,7 @@ run_name:
     - model.backbone.kwargs.num_blocks
 
 fixed:
-  name: discretax_cifar10_heads_strong_im
+  name: discretax_cifar10_heads_strong_damped
   trainer.max_steps: 100000
   trainer.log_every_steps: 100
   trainer.eval_every_steps: 500
@@ -21,8 +21,12 @@ fixed:
   model.hidden_dim: 256
   model.backbone.kwargs.num_blocks: 4
   model.backbone.kwargs.state_dim: 256
-  model.backbone.kwargs.discretization: IM
-  model.backbone.kwargs.damping: false
+  model.backbone.kwargs.discretization: IMEX
+  model.backbone.kwargs.initialization: AG
+  model.backbone.kwargs.damping: true
+  model.backbone.kwargs.stability: stable
+  model.backbone.kwargs.A_max: 16.0
+  model.backbone.kwargs.G_max: 8.0
   model.backbone.kwargs.r_min: 0.9
   model.backbone.kwargs.theta_max: 3.141592653589793
   model.backbone.kwargs.drop_rate: 0.1
@@ -30,7 +34,7 @@ fixed:
   wandb.enabled: true
   wandb.mode: online
   wandb.project: discretax
-  wandb.group: discretax_cifar10_heads_strong_im
+  wandb.group: discretax_cifar10_heads_strong_damped
   wandb.job_type: train
   wandb.tags:
     - LinOSS
@@ -43,7 +47,11 @@ fixed:
     - heads
     - projection
     - no-gating
-    - family-im
+    - family-damped
+    - ag-init
+    - stable-projection
+    - amax16
+    - gmax8
 
 grid:
   trainer.seed:

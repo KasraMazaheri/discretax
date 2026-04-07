@@ -1,4 +1,4 @@
-"""Launch a configured CIFAR-10 LinOSS head sweep across available GPUs."""
+"""Launch the default strong CIFAR-10 LinOSS sweep for one family on one node."""
 
 from __future__ import annotations
 
@@ -17,36 +17,41 @@ from typing import Any
 
 import yaml
 
+FAMILY_SWEEP_CONFIGS = {
+    "im": "configs/sweeps/cifar10_linoss_heads_proj_strong.yaml",
+    "damped": "configs/sweeps/cifar10_linoss_heads_proj_strong_damped.yaml",
+}
+
 
 def _parse_args() -> argparse.Namespace:
     """Parse launcher arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--sweep-config",
-        default="configs/sweeps/cifar10_linoss_heads_proj_strong.yaml",
-        help="Sweep YAML describing the base config, fixed overrides, and grid.",
+        "--family",
+        choices=sorted(FAMILY_SWEEP_CONFIGS),
+        required=True,
+        help="Which LinOSS family to launch on this node.",
     )
     parser.add_argument(
-        "--state-dim",
-        type=int,
+        "--sweep-config",
         default=None,
-        help="Override the sweep state dimension, e.g. 256 or 1024.",
+        help="Optional explicit sweep config path. Defaults to the selected family config.",
     )
     parser.add_argument(
         "--gpus",
         default="0,1,2,3,4,5,6,7",
-        help="Comma-separated GPU ids to use.",
+        help="Comma-separated GPU ids to use on this node.",
     )
     parser.add_argument(
         "--slots-per-gpu",
         type=int,
-        default=2,
-        help="Concurrent processes to allow per GPU.",
+        default=1,
+        help="Concurrent jobs to allow per GPU. Default is 1 for these long CIFAR runs.",
     )
     parser.add_argument(
         "--log-dir",
         default="logs",
-        help="Directory for launcher stdout/stderr logs.",
+        help="Directory for launcher logs.",
     )
     parser.add_argument(
         "--dry-run",
@@ -56,7 +61,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--detach",
         action="store_true",
-        help="Launch one tmux session per job and return immediately.",
+        help="Launch detached tmux sessions and return immediately.",
     )
     return parser.parse_args()
 
@@ -97,18 +102,14 @@ def _run_name(prefix: str, include_keys: list[str], overrides: dict[str, Any]) -
     """Construct a stable run name from selected config keys."""
     parts = [prefix]
     for key in include_keys:
-        if key not in overrides:
-            continue
-        parts.append(f"{_short_key(key)}{_normalize_value(overrides[key])}")
+        if key in overrides:
+            parts.append(f"{_short_key(key)}{_normalize_value(overrides[key])}")
     return "-".join(parts)
 
 
-def _build_jobs(sweep_config: dict[str, Any], state_dim: int | None) -> list[dict[str, Any]]:
+def _build_jobs(sweep_config: dict[str, Any]) -> list[dict[str, Any]]:
     """Materialize the grid sweep into concrete override dictionaries."""
     fixed = dict(sweep_config.get("fixed", {}))
-    if state_dim is not None:
-        fixed["model.backbone.kwargs.state_dim"] = state_dim
-
     grid = sweep_config.get("grid", {})
     grid_keys = list(grid)
     grid_values = [grid[key] for key in grid_keys]
@@ -120,13 +121,10 @@ def _build_jobs(sweep_config: dict[str, Any], state_dim: int | None) -> list[dic
     for values in itertools.product(*grid_values):
         overrides = dict(fixed)
         overrides.update(zip(grid_keys, values, strict=True))
-        if state_dim is not None:
-            group = str(overrides.get("wandb.group", "discretax_cifar10_heads_strong2"))
-            overrides["wandb.group"] = f"{group}_state{state_dim}"
-
         run_name = _run_name(prefix, include_keys, overrides)
         overrides["name"] = run_name
         overrides["wandb.run_name"] = run_name
+
         tags = list(overrides.get("wandb.tags", []))
         tags.extend(
             [
@@ -260,7 +258,7 @@ def _write_manifest(
     return manifest_path
 
 
-def _wait_for_slot(active: list[tuple[subprocess.Popen[Any], Any]], gpu: str, limit: int) -> None:
+def _wait_for_slot(active: list[tuple[subprocess.Popen[Any], str]], gpu: str, limit: int) -> None:
     """Block until a GPU has a free process slot."""
     while True:
         active[:] = [(proc, assigned_gpu) for proc, assigned_gpu in active if proc.poll() is None]
@@ -327,6 +325,7 @@ def _launch_jobs(
                 start_new_session=False,
             )
             log_handle.close()
+
         launched_jobs.append(
             {
                 "name": job["name"],
@@ -337,6 +336,7 @@ def _launch_jobs(
                 "command": cmd,
             }
         )
+
         if detach:
             print(f"[detach] gpu={gpu} session={session_name} name={job['name']}")
         else:
@@ -366,28 +366,29 @@ def _launch_jobs(
 
 
 def main() -> None:
-    """Materialize and launch the configured CIFAR sweep."""
+    """Launch one default strong CIFAR family sweep."""
     args = _parse_args()
-    sweep_config = _load_yaml(args.sweep_config)
+    sweep_config_path = args.sweep_config or FAMILY_SWEEP_CONFIGS[args.family]
+    sweep_config = _load_yaml(sweep_config_path)
     base_config = str(sweep_config["base_config"])
     gpus = [gpu.strip() for gpu in args.gpus.split(",") if gpu.strip()]
     if not gpus:
         raise ValueError("At least one GPU id must be provided via --gpus")
 
-    jobs = _build_jobs(sweep_config, args.state_dim)
-    print(f"Launching {len(jobs)} jobs from {args.sweep_config}")
-    raise_code = _launch_jobs(
+    jobs = _build_jobs(sweep_config)
+    print(f"Launching {len(jobs)} {args.family} jobs from {sweep_config_path}")
+    exit_code = _launch_jobs(
         jobs,
         base_config=base_config,
-        sweep_name=Path(args.sweep_config).stem,
+        sweep_name=Path(sweep_config_path).stem,
         gpus=gpus,
         slots_per_gpu=args.slots_per_gpu,
         log_dir=Path(args.log_dir),
         dry_run=args.dry_run,
         detach=args.detach,
     )
-    if raise_code != 0:
-        raise SystemExit(raise_code)
+    if exit_code != 0:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

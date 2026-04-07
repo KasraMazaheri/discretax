@@ -1,23 +1,30 @@
 defaults:
   - ./cifar10_linoss_strong
 
-name: discretax_cifar10_heads_strong2
-description: CIFAR-10 LinOSS strong head-sweep base with the image stem and augmented dataset path.
+name: discretax_cifar10_heads_strong
+description: CIFAR-10 LinOSS strong head-sweep base, matching the successful strong recipe while supporting separate IM and damped families.
 tags:
   - LinOSS
   - Cifar10
   - image-stem
   - cosine
   - augmentation
+  - mixup-cutmix
+  - ema
   - heads
   - projection
+  - no-gating
 wandb:
-  group: discretax_cifar10_heads_strong2
+  project: discretax
+  group: discretax_cifar10_heads_strong
   tags:
     - LinOSS
     - Cifar10
     - image-stem
     - cosine
     - augmentation
+    - mixup-cutmix
+    - ema
     - heads
     - projection
+    - no-gating
