@@ -58,10 +58,14 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
         num_heads: int = 1,
         use_head_gating: bool = False,
         use_head_output_projection: bool = False,
-        discretization: Literal["IM", "IMEX"] = "IMEX",
+        discretization: Literal["IM", "IMEX", "IMEX2", "IMEX3", "EX"] = "IMEX",
+        initialization: Literal["RT", "AG"] = "RT",
         damping: bool = True,
+        stability: Literal["oscillatory", "stable"] = "stable",
         r_min: float = 0.9,
         theta_max: float = jnp.pi,
+        A_max: float = 1.0,
+        G_max: float = 1.0,
         drop_rate: float = 0.1,
         prenorm: bool = True,
         use_bias: bool = True,
@@ -79,10 +83,15 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
             use_head_gating: whether to apply token-wise head gating in the sequence mixer.
             use_head_output_projection: whether to apply a dense projection after
                 concatenating multi-head outputs.
-            discretization: discretization method ("IM" or "IMEX").
+            discretization: discretization method ("IM", "IMEX", "IMEX2", "IMEX3", or "EX").
+            initialization: initialization strategy for damped variants ("AG" or "RT").
             damping: whether to use damping in LinOSS.
+            stability: "oscillatory" (complex conjugate eigenvalues)
+                       or "stable" (full Jury region).
             r_min: minimum value for the radius in LinOSS.
             theta_max: maximum value for theta parameter in LinOSS.
+            A_max: upper bound for A in AG initialization.
+            G_max: upper bound for G in AG initialization.
             drop_rate: dropout rate for blocks.
             prenorm: whether to apply prenorm in blocks.
             use_bias: whether to use bias in GLU channel mixers.
@@ -112,9 +121,13 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
                 use_head_gating=use_head_gating,
                 use_head_output_projection=use_head_output_projection,
                 discretization=discretization,
+                initialization=initialization,
                 damping=damping,
+                stability=stability,
                 r_min=r_min,
                 theta_max=theta_max,
+                A_max=A_max,
+                G_max=G_max,
                 dtype=self.compute_dtype,
             )
 
