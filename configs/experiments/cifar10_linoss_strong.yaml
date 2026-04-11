@@ -36,12 +36,12 @@ ema:
   decay: 0.9999
 model:
   name: linoss
-  hidden_dim: 256
+  hidden_dim: 128
   backbone:
     target: LinOSS
     kwargs:
       num_blocks: 4
-      state_dim: 256
+      state_dim: 128
       drop_rate: 0.1
       num_heads: 1
       use_head_gating: false
@@ -49,6 +49,10 @@ model:
       prenorm: true
       discretization: IM
       damping: false
+      initialization: AG
+      projection: stable
+      A_max: 16.0
+      G_max: 8.0
       r_min: 0.9
       theta_max: 3.141592653589793
   head:

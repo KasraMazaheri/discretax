@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import statistics
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -668,6 +670,49 @@ def _maybe_save_progress_checkpoint(
     )
 
 
+def _compute_speed_summary(output_dir: Path) -> dict[str, float]:
+    """Read history.jsonl and return median throughput for train and eval.
+
+    Skips the first few train records to avoid JIT compilation noise.
+    Train records are identified by having 'train_loss'. Eval records are
+    identified by having a key ending in '_examples_per_second' without
+    'train' in the key name.
+    """
+    history_file = output_dir / "history.jsonl"
+    if not history_file.exists():
+        return {}
+
+    train_eps: list[float] = []
+    eval_eps: list[float] = []
+    with history_file.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "train_loss" in record and "examples_per_second" in record:
+                train_eps.append(float(record["examples_per_second"]))
+            else:
+                for key, value in record.items():
+                    if key.endswith("_examples_per_second") and "train" not in key:
+                        eval_eps.append(float(value))
+                        break
+
+    # Drop first 3 train steps to avoid JIT warmup noise
+    _warmup_steps = 3
+    train_eps = train_eps[_warmup_steps:]
+
+    result: dict[str, float] = {}
+    if train_eps:
+        result["median_train_examples_per_second"] = statistics.median(train_eps)
+    if eval_eps:
+        result["median_eval_examples_per_second"] = statistics.median(eval_eps)
+    return result
+
+
 def _finalize_training_run(
     experiment_config: ExperimentConfig,
     *,
@@ -686,11 +731,15 @@ def _finalize_training_run(
         split_name="test",
         seed=experiment_config.trainer.seed + runtime_state.final_step + 1,
     )
+    speed_summary = _compute_speed_summary(output_dir)
+    parameter_count = count_params(runtime_state.best_model)
     tracker.summary(
         {
             "best_metric": runtime_state.best_metric,
             **test_metrics,
             "final_step": runtime_state.final_step,
+            "parameter_count": parameter_count,
+            **speed_summary,
         }
     )
     _write_completed_run_artifacts(
@@ -701,7 +750,9 @@ def _finalize_training_run(
             "mode": "train",
             "best_metric": runtime_state.best_metric,
             "final_step": runtime_state.final_step,
+            "parameter_count": parameter_count,
             **test_metrics,
+            **speed_summary,
         },
         final_step=runtime_state.final_step,
         best_metric=runtime_state.best_metric,
