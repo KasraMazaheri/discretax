@@ -156,7 +156,7 @@ def test_run_experiment_bfloat16_precision_policy(tmp_path: Path):
 
     assert result.final_step == 2
     assert jnp.isfinite(result.test_loss)
-    assert jnp.isfinite(result.test_accuracy)
+    assert jnp.isfinite(result.test_metric)
 
 
 def test_linoss_mixed_precision_initializes_backbone_in_target_dtype(tmp_path: Path):

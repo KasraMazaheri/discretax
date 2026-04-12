@@ -209,7 +209,7 @@ def test_build_uea_dataset_from_preprocessed_pickles(tmp_path: Path):
 
     assert dataset_bundle.sequence_length == 3
     assert dataset_bundle.input_dim == 2
-    assert dataset_bundle.num_classes == 2
+    assert dataset_bundle.output_dim == 2
     assert len(dataset_bundle.train) == 4
     assert np.isfinite(dataset_bundle.train.inputs).all()
 

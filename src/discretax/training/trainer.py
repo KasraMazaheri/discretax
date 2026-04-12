@@ -49,7 +49,7 @@ class RunResult:
     best_metric: float
     final_step: int
     test_loss: float
-    test_accuracy: float
+    test_metric: float  # accuracy for classification, MSE for regression
     mode: str = "train"
 
 
@@ -111,6 +111,66 @@ def _classification_metrics(
         loss = -jnp.mean(jnp.sum(target_probs * log_probs, axis=-1))
     accuracy = jnp.mean(jnp.argmax(log_probs, axis=-1) == targets)
     return loss, accuracy
+
+
+def _regression_metrics(
+    predictions: jax.Array,
+    targets: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Compute regression MSE loss and MAE."""
+    predictions = predictions.astype(jnp.float32)
+    targets = targets.astype(jnp.float32)
+    mse = jnp.mean((predictions - targets) ** 2)
+    mae = jnp.mean(jnp.abs(predictions - targets))
+    return mse, mae
+
+
+def _make_regression_train_step(optimizer):
+    """Create a compiled train-step function for regression tasks."""
+
+    @eqx.filter_value_and_grad(has_aux=True)
+    def _loss_fn(
+        model: eqx.nn.Sequential,
+        state: eqx.nn.State,
+        batch_inputs: jax.Array,
+        batch_targets: jax.Array,
+        key: jax.Array,
+    ) -> tuple[jax.Array, tuple[eqx.nn.State, jax.Array]]:
+        predictions, new_state = _batched_forward(model, state, batch_inputs, key)
+        loss, mae = _regression_metrics(predictions, batch_targets)
+        return loss, (new_state, mae)
+
+    @eqx.filter_jit
+    def train_step(
+        model: eqx.nn.Sequential,
+        state: eqx.nn.State,
+        opt_state: optax.OptState,
+        batch_inputs: jax.Array,
+        batch_targets: jax.Array,
+        key: jax.Array,
+    ) -> tuple[eqx.nn.Sequential, eqx.nn.State, optax.OptState, dict[str, jax.Array]]:
+        (loss, (new_state, mae)), grads = _loss_fn(model, state, batch_inputs, batch_targets, key)
+        updates, new_opt_state = optimizer.update(
+            grads,
+            opt_state,
+            params=eqx.filter(model, eqx.is_inexact_array),
+        )
+        new_model = eqx.apply_updates(model, updates)
+        return (
+            new_model,
+            new_state,
+            new_opt_state,
+            {
+                "loss": loss,
+                "mse": loss,
+                "mae": mae,
+                "grad_norm": optax.global_norm(grads),
+                "update_norm": optax.global_norm(updates),
+                "param_norm": optax.global_norm(eqx.filter(model, eqx.is_inexact_array)),
+            },
+        )
+
+    return train_step
 
 
 def _safe_throughput(count: int, duration_seconds: float) -> float:
@@ -265,6 +325,21 @@ def _eval_step(
     return {"loss": loss, "accuracy": accuracy}
 
 
+@eqx.filter_jit
+def _regression_eval_step(
+    model: eqx.nn.Sequential,
+    state: eqx.nn.State,
+    batch_inputs: jax.Array,
+    batch_targets: jax.Array,
+    key: jax.Array,
+) -> dict[str, jax.Array]:
+    """Run a single evaluation step for regression tasks."""
+    inference_model = eqx.nn.inference_mode(model, value=True)
+    predictions, _ = _batched_forward(inference_model, state, batch_inputs, key)
+    mse, mae = _regression_metrics(predictions, batch_targets)
+    return {"loss": mse, "mse": mse, "mae": mae}
+
+
 def _evaluate(
     model: eqx.nn.Sequential,
     state: eqx.nn.State,
@@ -276,11 +351,17 @@ def _evaluate(
 ) -> dict[str, float]:
     """Evaluate a model on a dataset split."""
     split = getattr(dataset_bundle, split_name)
+    is_regression = dataset_bundle.task == "regression"
     if len(split) == 0:
-        return {f"{split_name}_loss": float("nan"), f"{split_name}_accuracy": float("nan")}
+        empty: dict[str, float] = {f"{split_name}_loss": float("nan")}
+        empty[f"{split_name}_mse" if is_regression else f"{split_name}_accuracy"] = float("nan")
+        if is_regression:
+            empty[f"{split_name}_mae"] = float("nan")
+        return empty
 
     losses: list[float] = []
-    accuracies: list[float] = []
+    secondary: list[float] = []
+    maes: list[float] = []
     for batch_index, (batch_inputs, batch_targets) in enumerate(
         batch_iterator(
             split,
@@ -290,16 +371,22 @@ def _evaluate(
             seed=seed,
         )
     ):
-        metrics = _eval_step(
-            model, state, batch_inputs, batch_targets, jr.PRNGKey(seed + batch_index)
-        )
+        key = jr.PRNGKey(seed + batch_index)
+        if is_regression:
+            metrics = _regression_eval_step(model, state, batch_inputs, batch_targets, key)
+            maes.append(float(metrics["mae"]))
+        else:
+            metrics = _eval_step(model, state, batch_inputs, batch_targets, key)
+            secondary.append(float(metrics["accuracy"]))
         losses.append(float(metrics["loss"]))
-        accuracies.append(float(metrics["accuracy"]))
 
-    return {
-        f"{split_name}_loss": sum(losses) / len(losses),
-        f"{split_name}_accuracy": sum(accuracies) / len(accuracies),
-    }
+    result: dict[str, float] = {f"{split_name}_loss": sum(losses) / len(losses)}
+    if is_regression:
+        result[f"{split_name}_mse"] = sum(losses) / len(losses)
+        result[f"{split_name}_mae"] = sum(maes) / len(maes)
+    else:
+        result[f"{split_name}_accuracy"] = sum(secondary) / len(secondary)
+    return result
 
 
 def _is_improved(value: float, best_value: float, mode: str) -> bool:
@@ -453,7 +540,7 @@ def _log_static_summary(
             "dataset_name": dataset_bundle.name,
             "input_dim": dataset_bundle.input_dim,
             "sequence_length": dataset_bundle.sequence_length,
-            "num_classes": dataset_bundle.num_classes,
+            "output_dim": dataset_bundle.output_dim,
             "parameter_count": count_params(model),
             "ema_enabled": experiment_config.ema.enabled,
             "label_smoothing": experiment_config.regularization.label_smoothing,
@@ -546,12 +633,13 @@ def _run_eval_only(
         final_step=runtime_state.final_step,
         best_metric=runtime_state.best_metric,
     )
+    secondary_key = "test_mse" if dataset_bundle.task == "regression" else "test_accuracy"
     return RunResult(
         output_dir=output_dir,
         best_metric=runtime_state.best_metric,
         final_step=runtime_state.final_step,
         test_loss=test_metrics["test_loss"],
-        test_accuracy=test_metrics["test_accuracy"],
+        test_metric=test_metrics[secondary_key],
         mode="eval_only",
     )
 
@@ -757,14 +845,82 @@ def _finalize_training_run(
         final_step=runtime_state.final_step,
         best_metric=runtime_state.best_metric,
     )
+    secondary_key = "test_mse" if dataset_bundle.task == "regression" else "test_accuracy"
     return RunResult(
         output_dir=output_dir,
         best_metric=runtime_state.best_metric,
         final_step=runtime_state.final_step,
         test_loss=test_metrics["test_loss"],
-        test_accuracy=test_metrics["test_accuracy"],
+        test_metric=test_metrics[secondary_key],
         mode="train",
     )
+
+
+def _execute_train_step(
+    runtime_state: _RuntimeState,
+    batch_inputs: Any,
+    batch_targets: Any,
+    train_step: Any,
+    is_regression: bool,
+    experiment_config: ExperimentConfig,
+    dataset_bundle: DatasetBundle,
+    batch_aug_key: Any,
+    step_key: Any,
+) -> tuple[_RuntimeState, dict[str, Any]]:
+    if is_regression:
+        (
+            runtime_state.model,
+            runtime_state.state,
+            runtime_state.opt_state,
+            raw_metrics,
+        ) = train_step(
+            runtime_state.model,
+            runtime_state.state,
+            runtime_state.opt_state,
+            batch_inputs,
+            batch_targets,
+            step_key,
+        )
+        extras: dict[str, Any] = {
+            "train_mse": float(raw_metrics["mse"]),
+            "train_mae": float(raw_metrics["mae"]),
+        }
+    else:
+        regularized_batch = apply_batch_regularization(
+            batch_inputs,
+            batch_targets,
+            num_classes=dataset_bundle.output_dim,
+            regularization_config=experiment_config.regularization,
+            dataset_metadata=dataset_bundle.train.metadata,
+            key=batch_aug_key,
+        )
+        (
+            runtime_state.model,
+            runtime_state.state,
+            runtime_state.opt_state,
+            raw_metrics,
+        ) = train_step(
+            runtime_state.model,
+            runtime_state.state,
+            runtime_state.opt_state,
+            regularized_batch.inputs,
+            regularized_batch.hard_targets,
+            regularized_batch.target_probs,
+            step_key,
+        )
+        extras = {
+            "train_accuracy": float(raw_metrics["accuracy"]),
+            "mix_augmentation_applied": float(regularized_batch.applied),
+            "mix_augmentation_lambda": regularized_batch.lambda_value,
+        }
+    metrics: dict[str, Any] = {
+        "loss": float(raw_metrics["loss"]),
+        "grad_norm": float(raw_metrics["grad_norm"]),
+        "update_norm": float(raw_metrics["update_norm"]),
+        "param_norm": float(raw_metrics["param_norm"]),
+        "extras": extras,
+    }
+    return runtime_state, metrics
 
 
 def run_experiment(
@@ -821,7 +977,10 @@ def run_experiment(
     )
     write_run_metadata(output_dir, run_metadata)
 
-    train_step = _make_train_step(optimizer)
+    is_regression = dataset_bundle.task == "regression"
+    train_step = (
+        _make_regression_train_step(optimizer) if is_regression else _make_train_step(optimizer)
+    )
     _log_static_summary(
         tracker,
         dataset_bundle,
@@ -864,28 +1023,19 @@ def run_experiment(
 
                 step_started_at = perf_counter()
                 loop_key, batch_aug_key, step_key = jr.split(loop_key, 3)
-                regularized_batch = apply_batch_regularization(
-                    batch_inputs,
-                    batch_targets,
-                    num_classes=dataset_bundle.num_classes,
-                    regularization_config=experiment_config.regularization,
-                    dataset_metadata=dataset_bundle.train.metadata,
-                    key=batch_aug_key,
+
+                runtime_state, task_step_metrics = _execute_train_step(
+                    runtime_state=runtime_state,
+                    batch_inputs=batch_inputs,
+                    batch_targets=batch_targets,
+                    train_step=train_step,
+                    is_regression=is_regression,
+                    experiment_config=experiment_config,
+                    dataset_bundle=dataset_bundle,
+                    batch_aug_key=batch_aug_key,
+                    step_key=step_key,
                 )
-                (
-                    runtime_state.model,
-                    runtime_state.state,
-                    runtime_state.opt_state,
-                    train_metrics,
-                ) = train_step(
-                    runtime_state.model,
-                    runtime_state.state,
-                    runtime_state.opt_state,
-                    regularized_batch.inputs,
-                    regularized_batch.hard_targets,
-                    regularized_batch.target_probs,
-                    step_key,
-                )
+
                 step_duration_seconds = perf_counter() - step_started_at
                 runtime_state.final_step += 1
                 if runtime_state.ema_model is not None:
@@ -895,22 +1045,20 @@ def run_experiment(
                         decay=experiment_config.ema.decay,
                     )
 
-                step_metrics = {
+                step_metrics: dict[str, Any] = {
                     "epoch": epoch,
                     "step": runtime_state.final_step,
                     "learning_rate": float(learning_rate_schedule(runtime_state.final_step - 1)),
-                    "train_loss": float(train_metrics["loss"]),
-                    "train_accuracy": float(train_metrics["accuracy"]),
-                    "grad_norm": float(train_metrics["grad_norm"]),
-                    "update_norm": float(train_metrics["update_norm"]),
-                    "param_norm": float(train_metrics["param_norm"]),
+                    "train_loss": task_step_metrics["loss"],
+                    "grad_norm": task_step_metrics["grad_norm"],
+                    "update_norm": task_step_metrics["update_norm"],
+                    "param_norm": task_step_metrics["param_norm"],
                     "step_time_seconds": step_duration_seconds,
                     "examples_per_second": _safe_throughput(
                         batch_inputs.shape[0],
                         step_duration_seconds,
                     ),
-                    "mix_augmentation_applied": float(regularized_batch.applied),
-                    "mix_augmentation_lambda": regularized_batch.lambda_value,
+                    **task_step_metrics["extras"],
                 }
 
                 if runtime_state.final_step % experiment_config.trainer.log_every_steps == 0:

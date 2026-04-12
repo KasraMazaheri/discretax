@@ -1,0 +1,66 @@
+defaults:
+  - ../base
+  - ../datasets/ppg
+  - ../models/linoss
+
+name: ppg-linoss-sanity
+description: Sanity-check LinOSS experiment on the PPG-DaLiA regression dataset.
+tags:
+  - sanity
+  - ppg
+  - linoss
+paths:
+  data_root: data
+  output_root: outputs
+loader:
+  batch_size: 2
+  eval_batch_size: 4
+optimizer:
+  name: adamw
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  grad_clip_norm: 1.0
+  schedule:
+    name: warmup_cosine_decay
+    warmup_steps: 5
+    decay_steps: 30
+    end_value: 0.00001
+model:
+  name: linoss
+  hidden_dim: 32
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 2
+      state_dim: 64
+      drop_rate: 0.0
+      prenorm: true
+      discretization: IMEX
+      damping: true
+      initialization: AG
+      stability: stable
+      A_max: 16.0
+      G_max: 8.0
+  head:
+    target: RegressionHead
+    kwargs:
+      reduce: false
+      output_step: 128
+checkpoint:
+  monitor: val_loss
+  mode: min
+trainer:
+  seed: 0
+  num_epochs: 1
+  max_steps: 30
+  log_every_steps: 1
+  eval_every_steps: 5
+  checkpoint_every_steps: 10
+wandb:
+  enabled: true
+  mode: offline
+  project: discretax-ppg
+  job_type: train
+  tags:
+    - sanity
+    - offline

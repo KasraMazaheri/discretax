@@ -38,7 +38,7 @@ class VariantSummary:
     best_metric: float
     final_step: int
     test_loss: float
-    test_accuracy: float
+    test_metric: float
     val_loss_at_50: float | None
     val_loss_at_100: float | None
     val_loss_at_200: float | None
@@ -192,7 +192,7 @@ def _run_variant(config_path: str, variant: SweepVariant) -> VariantSummary:
         best_metric=result.best_metric,
         final_step=result.final_step,
         test_loss=result.test_loss,
-        test_accuracy=result.test_accuracy,
+        test_metric=result.test_metric,
         val_loss_at_50=_history_at_or_before(history, 50, "validation_loss"),
         val_loss_at_100=_history_at_or_before(history, 100, "validation_loss"),
         val_loss_at_200=_history_at_or_before(history, 200, "validation_loss"),

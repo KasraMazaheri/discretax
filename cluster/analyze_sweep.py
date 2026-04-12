@@ -109,7 +109,8 @@ def load_job_results(sweep_dir: Path) -> list[dict[str, Any]]:
         result: dict[str, Any] = {
             "job_id": job_id,
             "job_dir": str(run_dir),
-            "test_accuracy": summary.get("test_accuracy"),
+            # test_metric is the canonical name; test_accuracy kept for backward compat
+            "test_accuracy": summary.get("test_metric", summary.get("test_accuracy")),
             "test_loss": summary.get("test_loss"),
             "best_metric": summary.get("best_metric"),
             "final_step": summary.get("final_step"),

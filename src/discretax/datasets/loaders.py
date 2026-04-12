@@ -149,7 +149,7 @@ def _build_mnist_dataset(
         validation=validation_split,
         test=test_split,
         input_dim=int(train_split.inputs.shape[-1]),
-        num_classes=10,
+        output_dim=10,
         sequence_length=int(train_split.inputs.shape[1]),
         metadata={
             "image_shape": image_shape,
@@ -225,7 +225,7 @@ def _build_cifar10_dataset(
         validation=validation_split,
         test=test_split,
         input_dim=int(train_split.inputs.shape[-1]),
-        num_classes=10,
+        output_dim=10,
         sequence_length=int(train_split.inputs.shape[1]),
         metadata={
             "image_shape": image_shape,
@@ -312,7 +312,7 @@ def _build_uea_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig)
             test_split,
         )
 
-    num_classes = int(
+    output_dim = int(
         max(
             train_targets.max(initial=0),
             validation_targets.max(initial=0),
@@ -327,8 +327,40 @@ def _build_uea_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig)
         validation=validation_split,
         test=test_split,
         input_dim=int(train_split.inputs.shape[-1]),
-        num_classes=num_classes,
+        output_dim=output_dim,
         sequence_length=int(train_split.inputs.shape[1]),
+    )
+
+
+def _build_ppg_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig) -> DatasetBundle:
+    """Build the PPG-DaLiA regression dataset bundle from preprocessed pickle files."""
+    dataset_root = resolve_dataset_path(paths_config, dataset_config)
+
+    train_inputs = _load_pickle(dataset_root / "X_train.pkl").astype(np.float32)
+    validation_inputs = _load_pickle(dataset_root / "X_val.pkl").astype(np.float32)
+    test_inputs = _load_pickle(dataset_root / "X_test.pkl").astype(np.float32)
+    # Targets from process_ppg.py are (N, T_target); expand to (N, T_target, 1)
+    # so they align with the head output shape (T_target, out_features=1).
+    train_targets = _load_pickle(dataset_root / "y_train.pkl").astype(np.float32)[:, :, np.newaxis]
+    validation_targets = _load_pickle(dataset_root / "y_val.pkl").astype(np.float32)[
+        :, :, np.newaxis
+    ]
+    test_targets = _load_pickle(dataset_root / "y_test.pkl").astype(np.float32)[:, :, np.newaxis]
+
+    if dataset_config.params.get("include_time", False):
+        train_inputs = _maybe_add_time_channel(train_inputs)
+        validation_inputs = _maybe_add_time_channel(validation_inputs)
+        test_inputs = _maybe_add_time_channel(test_inputs)
+
+    return DatasetBundle(
+        name=dataset_config.resolved_name,
+        task="regression",
+        train=DatasetSplit(train_inputs, train_targets),
+        validation=DatasetSplit(validation_inputs, validation_targets),
+        test=DatasetSplit(test_inputs, test_targets),
+        input_dim=int(train_inputs.shape[-1]),
+        output_dim=1,
+        sequence_length=int(train_inputs.shape[1]),
     )
 
 
@@ -340,4 +372,6 @@ def build_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig) -> D
         return _build_cifar10_dataset(paths_config, dataset_config)
     if dataset_config.kind == "uea":
         return _build_uea_dataset(paths_config, dataset_config)
+    if dataset_config.kind == "ppg":
+        return _build_ppg_dataset(paths_config, dataset_config)
     raise ValueError(f"Unsupported dataset kind: {dataset_config.kind}")

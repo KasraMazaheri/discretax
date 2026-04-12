@@ -59,7 +59,7 @@ def main() -> None:
                 "best_metric": result.best_metric,
                 "final_step": result.final_step,
                 "test_loss": result.test_loss,
-                "test_accuracy": result.test_accuracy,
+                "test_metric": result.test_metric,
                 "mode": result.mode,
             },
             sort_keys=False,

@@ -79,7 +79,7 @@ def build_model(
     )
     head = _build_partial(head_config).resolve(
         in_features=experiment_config.model.hidden_dim,
-        out_features=dataset_bundle.num_classes,
+        out_features=dataset_bundle.output_dim,
         key=head_key,
     )
     return eqx.nn.Sequential([encoder, backbone, head])
