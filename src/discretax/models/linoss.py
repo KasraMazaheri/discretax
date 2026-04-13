@@ -68,6 +68,7 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
         G_max: float = 1.0,
         drop_rate: float = 0.1,
         prenorm: bool = True,
+        norm_type: str = "batchnorm",
         use_bias: bool = True,
         dtype: jnp.dtype = jnp.float32,
         **kwargs,
@@ -94,6 +95,7 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
             G_max: upper bound for G in AG initialization.
             drop_rate: dropout rate for blocks.
             prenorm: whether to apply prenorm in blocks.
+            norm_type: normalization type to use inside each block.
             use_bias: whether to use bias in GLU channel mixers.
             dtype: compute dtype for the LinOSS backbone.
             *args: Additional positional arguments (ignored).
@@ -148,6 +150,7 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
                 key=keys[2 * num_blocks + i],
                 drop_rate=drop_rate,
                 prenorm=prenorm,
+                norm_type=norm_type,
                 dtype=self.compute_dtype,
             )
             self.blocks.append(block)

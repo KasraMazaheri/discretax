@@ -47,7 +47,7 @@ def _write_tiny_uea_dataset(root: Path) -> None:
             pickle.dump(payload, file)
 
 
-def _write_runtime_config(tmp_path: Path, *, max_steps: int) -> Path:
+def _write_runtime_config(tmp_path: Path, *, max_steps: int, num_epochs: int = 2) -> Path:
     """Write a tiny runtime config and return its path."""
     config_path = tmp_path / f"runtime-{max_steps}.yaml"
     config_path.write_text(
@@ -72,7 +72,7 @@ ema:
   decay: 0.99
 trainer:
   seed: 0
-  num_epochs: 2
+  num_epochs: {num_epochs}
   max_steps: {max_steps}
   log_every_steps: 1
   eval_every_steps: 1
@@ -101,6 +101,83 @@ checkpoint:
   enabled: true
   save_best: true
   monitor: val_loss
+  mode: min
+wandb:
+  enabled: false
+""".strip()
+    )
+    return config_path
+
+
+def _write_tiny_ltsf_csv(root: Path, *, rows: int = 30) -> None:
+    """Write a tiny CSV forecasting dataset."""
+    csv_path = root / "ToyForecast.csv"
+    lines = ["date,OT,HUFL,HULL"]
+    for index in range(rows):
+        day = 1 + index // 24
+        hour = index % 24
+        lines.append(
+            "2024-01-"
+            f"{day:02d} {hour:02d}:00:00,"
+            f"{0.5 * index:.2f},{1.0 + index:.2f},{2.0 + index:.2f}"
+        )
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_forecasting_runtime_config(
+    tmp_path: Path, *, max_steps: int, num_epochs: int = 2
+) -> Path:
+    """Write a tiny forecasting runtime config and return its path."""
+    config_path = tmp_path / f"forecasting-runtime-{max_steps}.yaml"
+    config_path.write_text(
+        f"""
+name: tiny-ltsf-smoke
+paths:
+  data_root: {tmp_path}
+  output_root: {tmp_path / "outputs"}
+loader:
+  batch_size: 2
+  eval_batch_size: 2
+optimizer:
+  name: adam
+  learning_rate: 0.001
+  schedule:
+    name: constant
+trainer:
+  seed: 0
+  num_epochs: {num_epochs}
+  max_steps: {max_steps}
+  log_every_steps: 1
+  eval_every_steps: 1
+  checkpoint_every_steps: 1
+dataset:
+  kind: ltsf
+  name: ToyForecast
+  root: .
+  params:
+    file_name: ToyForecast.csv
+    seq_len: 4
+    pred_len: 2
+    features_mode: MS
+    target: OT
+    time_features: calendar
+model:
+  name: lru
+  hidden_dim: 8
+  encoder:
+    target: LinearEncoder
+  backbone:
+    target: LRU
+    kwargs:
+      num_blocks: 1
+      state_dim: 4
+      drop_rate: 0.0
+  head:
+    target: SequenceForecastHead
+checkpoint:
+  enabled: true
+  save_best: true
+  monitor: val_mse
   mode: min
 wandb:
   enabled: false
@@ -199,6 +276,34 @@ def test_run_experiment_rejects_mixed_precision_for_non_linoss(tmp_path: Path):
 
     with pytest.raises(ValueError, match="only for LinOSS"):
         run_experiment(config)
+
+
+def test_run_forecasting_experiment_smoke(tmp_path: Path):
+    """A tiny forecasting experiment completes through the shared runtime."""
+    _write_tiny_ltsf_csv(tmp_path)
+    config = load_experiment_config(_write_forecasting_runtime_config(tmp_path, max_steps=2))
+    dataset_bundle = build_dataset(config.paths, config.dataset)
+    model = build_model(config, dataset_bundle, jr.PRNGKey(0))
+    assert model.layers[-1].prediction_length == 2
+    assert model.layers[-1].target_dim == 1
+
+    result = run_experiment(config)
+
+    assert result.final_step == 2
+    assert result.output_dir.exists()
+    assert jnp.isfinite(result.test_loss)
+    assert jnp.isfinite(result.test_metrics["test_mae"])
+
+
+@pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")
+def test_run_experiment_max_steps_override_epoch_budget(tmp_path: Path):
+    """When max_steps is set, training continues across epochs until that step budget."""
+    _write_tiny_uea_dataset(tmp_path)
+    config = load_experiment_config(_write_runtime_config(tmp_path, max_steps=3, num_epochs=1))
+
+    result = run_experiment(config)
+
+    assert result.final_step == 3
 
 
 @pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")

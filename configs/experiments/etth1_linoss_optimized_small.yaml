@@ -1,0 +1,41 @@
+defaults:
+  - ./etth1_linoss_pilot
+
+name: etth1-linoss-optimized-normalized
+description: Stronger ETTh1 LinOSS baseline for follow-up forecasting experiments.
+tags:
+  - forecasting
+  - ltsf
+  - etth1
+  - linoss
+  - optimized
+loader:
+  batch_size: 64
+  eval_batch_size: 128
+optimizer:
+  learning_rate: 0.00005
+  weight_decay: 0.0
+  grad_clip_norm: 0.5
+  schedule:
+    name: warmup_cosine_decay
+    warmup_steps: 100
+    decay_steps: 50000
+    end_value: 0.000005
+trainer:
+  max_steps: 50000
+  num_epochs: 100
+  log_every_steps: 25
+  eval_every_steps: 250
+  checkpoint_every_steps: 5000
+model:
+  hidden_dim: 256
+  backbone:
+    kwargs:
+      state_dim: 256
+wandb:
+  group: etth1-linoss-optimized
+  tags:
+    - forecasting
+    - etth1
+    - linoss
+    - optimized

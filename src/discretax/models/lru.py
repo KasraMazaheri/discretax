@@ -57,6 +57,7 @@ class LRU(eqx.nn.StatefulLayer, PartialModule):
         max_phase: float = 2 * jnp.pi,
         drop_rate: float = 0.1,
         prenorm: bool = True,
+        norm_type: str = "batchnorm",
         use_bias: bool = True,
         **kwargs,
     ):
@@ -72,6 +73,7 @@ class LRU(eqx.nn.StatefulLayer, PartialModule):
             max_phase: maximum phase angle for complex-valued eigenvalues.
             drop_rate: dropout rate for blocks.
             prenorm: whether to apply prenorm in blocks.
+            norm_type: normalization type to use inside each block.
             use_bias: whether to use bias in GLU channel mixers.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
@@ -107,6 +109,7 @@ class LRU(eqx.nn.StatefulLayer, PartialModule):
                 key=keys[2 * num_blocks + i],
                 drop_rate=drop_rate,
                 prenorm=prenorm,
+                norm_type=norm_type,
             )
             self.blocks.append(block)
 

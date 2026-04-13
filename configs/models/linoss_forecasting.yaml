@@ -1,0 +1,22 @@
+defaults:
+  - ./linoss
+
+model:
+  hidden_dim: 64
+  encoder:
+    target: LinearEncoder
+    kwargs:
+      use_bias: false
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 4
+      state_dim: 64
+      num_heads: 1
+      use_head_gating: false
+      use_head_output_projection: false
+      drop_rate: 0.1
+      prenorm: true
+      norm_type: layernorm
+  head:
+    target: SequenceForecastHead

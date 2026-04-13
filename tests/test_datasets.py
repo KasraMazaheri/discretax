@@ -238,3 +238,52 @@ def test_build_uea_dataset_resolves_processed_alias_from_data_root(tmp_path: Pat
 
     assert dataset_bundle.name == "TinyUEA"
     assert dataset_bundle.sequence_length == 3
+
+
+def _write_tiny_ltsf_csv(path: Path, *, rows: int = 30) -> Path:
+    """Write a tiny long-term forecasting CSV dataset."""
+    csv_path = path / "ToyForecast.csv"
+    lines = ["date,OT,HUFL,HULL"]
+    for index in range(rows):
+        day = 1 + index // 24
+        hour = index % 24
+        lines.append(
+            "2024-01-"
+            f"{day:02d} {hour:02d}:00:00,"
+            f"{0.5 * index:.2f},{1.0 + index:.2f},{2.0 + index:.2f}"
+        )
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return csv_path
+
+
+def test_build_ltsf_dataset_from_csv(tmp_path: Path):
+    """LTSF loader builds standardized forecasting windows from one CSV pipeline."""
+    _write_tiny_ltsf_csv(tmp_path)
+
+    dataset_bundle = build_dataset(
+        PathsConfig(data_root=str(tmp_path)),
+        DatasetConfig(
+            kind="ltsf",
+            name="ToyForecast",
+            root=".",
+            params={
+                "seq_len": 4,
+                "pred_len": 2,
+                "features_mode": "MS",
+                "target": "OT",
+                "time_features": "calendar",
+            },
+        ),
+    )
+
+    assert dataset_bundle.task == "forecasting"
+    assert dataset_bundle.sequence_length == 4
+    assert dataset_bundle.output_dim == 1
+    assert dataset_bundle.input_dim == 8
+    assert len(dataset_bundle.train) == 16
+    assert len(dataset_bundle.validation) == 2
+    assert len(dataset_bundle.test) == 5
+    assert dataset_bundle.train.targets.shape[1:] == (2, 1)
+    assert dataset_bundle.metadata["prediction_length"] == 2
+    assert np.isfinite(dataset_bundle.train.inputs).all()
+    assert np.isfinite(dataset_bundle.train.targets).all()

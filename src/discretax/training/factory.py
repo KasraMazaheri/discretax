@@ -9,6 +9,7 @@ from jaxtyping import PRNGKeyArray
 
 from discretax.datasets import DatasetBundle
 from discretax.training.config import ComponentConfig, ExperimentConfig, PrecisionConfig
+from discretax.training.tasks import resolve_task_config
 from discretax.utils import resolve_target
 from discretax.utils.config_mixin import Partial
 
@@ -55,6 +56,7 @@ def build_model(
 ) -> eqx.nn.StatefulLayer:
     """Build an encoder-backbone-head model stack for a dataset."""
     encoder_key, backbone_key, head_key = jr.split(key, 3)
+    task_config = resolve_task_config(dataset_bundle, experiment_config)
     compute_dtype = _resolve_compute_dtype(
         experiment_config.model.name,
         experiment_config.precision,
@@ -79,7 +81,8 @@ def build_model(
     )
     head = _build_partial(head_config).resolve(
         in_features=experiment_config.model.hidden_dim,
-        out_features=dataset_bundle.num_classes,
+        out_features=task_config.head_out_features,
         key=head_key,
+        **task_config.head_kwargs,
     )
     return eqx.nn.Sequential([encoder, backbone, head])

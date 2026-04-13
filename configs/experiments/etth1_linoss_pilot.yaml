@@ -1,0 +1,70 @@
+defaults:
+  - ../base
+  - ../datasets/ltsf
+  - ../models/linoss_forecasting
+
+name: etth1-linoss-pilot
+description: Conservative ETTh1 LinOSS pilot config for validating long-horizon forecasting training dynamics.
+tags:
+  - forecasting
+  - ltsf
+  - etth1
+  - linoss
+  - pilot
+loader:
+  batch_size: 32
+  eval_batch_size: 64
+optimizer:
+  name: adamw
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  grad_clip_norm: 1.0
+  schedule:
+    name: warmup_cosine_decay
+    warmup_steps: 50
+    decay_steps: 2000
+    end_value: 0.00001
+trainer:
+  seed: 0
+  num_epochs: 1
+  max_steps: 2000
+  log_every_steps: 10
+  eval_every_steps: 100
+  checkpoint_every_steps: 200
+dataset:
+  name: ETTh1
+  root: LTSF
+  params:
+    seq_len: 96
+    pred_len: 96
+    features_mode: M
+    target: OT
+    time_features: calendar
+model:
+  hidden_dim: 128
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 4
+      state_dim: 128
+      num_heads: 1
+      use_head_gating: false
+      use_head_output_projection: false
+      drop_rate: 0.0
+      prenorm: true
+      norm_type: layernorm
+checkpoint:
+  enabled: true
+  save_best: true
+  monitor: val_mse
+  mode: min
+wandb:
+  enabled: true
+  mode: online
+  project: discretax-ltsf
+  group: etth1-linoss-pilot
+  tags:
+    - forecasting
+    - etth1
+    - linoss
+    - pilot

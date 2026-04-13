@@ -15,6 +15,25 @@ from discretax.datasets.images import (
 )
 from discretax.training.config import DatasetConfig, PathsConfig
 
+_LTSF_FIXED_SPLITS = {
+    "ETTh1": (12 * 30 * 24, 4 * 30 * 24, 4 * 30 * 24),
+    "ETTh2": (12 * 30 * 24, 4 * 30 * 24, 4 * 30 * 24),
+    "ETTm1": (12 * 30 * 24 * 4, 4 * 30 * 24 * 4, 4 * 30 * 24 * 4),
+    "ETTm2": (12 * 30 * 24 * 4, 4 * 30 * 24 * 4, 4 * 30 * 24 * 4),
+}
+
+_LTSF_DEFAULT_FILES = {
+    "ETTh1": "ETTh1.csv",
+    "ETTh2": "ETTh2.csv",
+    "ETTm1": "ETTm1.csv",
+    "ETTm2": "ETTm2.csv",
+    "Weather": "weather.csv",
+    "Traffic": "traffic.csv",
+    "Electricity": "electricity.csv",
+    "Exchange": "exchange_rate.csv",
+    "ILI": "national_illness.csv",
+}
+
 
 def resolve_dataset_path(paths_config: PathsConfig, dataset_config: DatasetConfig) -> Path:
     """Resolve the on-disk dataset path from global and dataset-local roots."""
@@ -149,6 +168,7 @@ def _build_mnist_dataset(
         validation=validation_split,
         test=test_split,
         input_dim=int(train_split.inputs.shape[-1]),
+        output_dim=10,
         num_classes=10,
         sequence_length=int(train_split.inputs.shape[1]),
         metadata={
@@ -225,6 +245,7 @@ def _build_cifar10_dataset(
         validation=validation_split,
         test=test_split,
         input_dim=int(train_split.inputs.shape[-1]),
+        output_dim=10,
         num_classes=10,
         sequence_length=int(train_split.inputs.shape[1]),
         metadata={
@@ -327,8 +348,283 @@ def _build_uea_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig)
         validation=validation_split,
         test=test_split,
         input_dim=int(train_split.inputs.shape[-1]),
+        output_dim=num_classes,
         num_classes=num_classes,
         sequence_length=int(train_split.inputs.shape[1]),
+    )
+
+
+def _resolve_ltsf_csv_path(
+    dataset_path: Path, dataset_name: str, params: dict[str, object]
+) -> Path:
+    """Resolve the CSV file for a long-term forecasting dataset."""
+    default_file_name = _LTSF_DEFAULT_FILES.get(dataset_name, f"{dataset_name}.csv")
+    file_name = str(params.get("file_name", default_file_name))
+    candidate_names = [file_name]
+    if file_name.lower() != file_name:
+        candidate_names.append(file_name.lower())
+    if dataset_path.is_file():
+        return dataset_path
+
+    candidates: list[Path] = []
+    for candidate_name in candidate_names:
+        candidates.extend(
+            [
+                dataset_path / candidate_name,
+                dataset_path / dataset_name / candidate_name,
+            ]
+        )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    recursive_matches: list[Path] = []
+    for candidate_name in candidate_names:
+        recursive_matches.extend(sorted(dataset_path.rglob(candidate_name)))
+    recursive_matches = sorted(set(recursive_matches))
+    if len(recursive_matches) == 1:
+        return recursive_matches[0]
+    if recursive_matches:
+        raise FileNotFoundError(
+            f"Found multiple candidate files for {dataset_name!r}: {recursive_matches}"
+        )
+
+    candidate_paths = [str(path) for path in candidates]
+    raise FileNotFoundError(
+        "Could not find the requested LTSF dataset CSV.\n"
+        f"dataset_name: {dataset_name}\n"
+        f"searched_root: {dataset_path}\n"
+        f"candidate_files: {candidate_names}\n"
+        f"candidate_paths: {candidate_paths}\n"
+        "Place the benchmark CSV under the configured root, for example "
+        f"{dataset_path / file_name}, or run "
+        "`uv run python scripts/datasets/download_ltsf.py --dataset "
+        f"{dataset_name}`."
+    )
+
+
+def _calendar_time_features(values) -> np.ndarray:
+    """Build simple normalized calendar features from a datetime index."""
+    month = (values.dt.month.to_numpy(dtype=np.float32) - 1.0) / 11.0
+    day = (values.dt.day.to_numpy(dtype=np.float32) - 1.0) / 30.0
+    weekday = values.dt.weekday.to_numpy(dtype=np.float32) / 6.0
+    hour = values.dt.hour.to_numpy(dtype=np.float32) / 23.0
+    minute = values.dt.minute.to_numpy(dtype=np.float32) / 59.0
+    return np.stack([month, day, weekday, hour, minute], axis=-1).astype(np.float32)
+
+
+def _resolve_ltsf_feature_arrays(
+    dataframe,
+    *,
+    features_mode: str,
+    target_column: str,
+    include_time_features: bool,
+) -> tuple[np.ndarray, np.ndarray, list[str], list[str]]:
+    """Resolve input and target arrays for an LTSF dataset."""
+    value_columns = [column for column in dataframe.columns if column != "date"]
+    if target_column not in value_columns:
+        raise ValueError(f"LTSF target column {target_column!r} is not present in the dataset")
+
+    all_values = dataframe[value_columns].to_numpy(dtype=np.float32)
+    target_index = value_columns.index(target_column)
+    if features_mode == "S":
+        input_values = all_values[:, target_index : target_index + 1]
+        target_values = input_values
+        target_columns = [target_column]
+    elif features_mode == "MS":
+        input_values = all_values
+        target_values = all_values[:, target_index : target_index + 1]
+        target_columns = [target_column]
+    elif features_mode == "M":
+        input_values = all_values
+        target_values = all_values
+        target_columns = value_columns
+    else:
+        raise ValueError(f"Unsupported LTSF features_mode: {features_mode}")
+
+    input_columns = list(value_columns if features_mode != "S" else [target_column])
+    if include_time_features:
+        time_features = _calendar_time_features(dataframe["date"])
+        input_values = np.concatenate([input_values, time_features], axis=-1)
+        input_columns.extend(["month", "day", "weekday", "hour", "minute"])
+
+    return input_values, target_values, input_columns, target_columns
+
+
+def _resolve_ltsf_split_ranges(
+    *,
+    dataset_name: str,
+    num_rows: int,
+    sequence_length: int,
+) -> dict[str, tuple[int, int]]:
+    """Resolve train/validation/test borders following common LTSF conventions."""
+    if dataset_name in _LTSF_FIXED_SPLITS:
+        num_train, num_validation, num_test = _LTSF_FIXED_SPLITS[dataset_name]
+    else:
+        num_train = int(num_rows * 0.7)
+        num_test = int(num_rows * 0.2)
+        num_validation = num_rows - num_train - num_test
+
+    if num_train + num_validation + num_test > num_rows:
+        raise ValueError(
+            f"LTSF split sizes exceed dataset length for {dataset_name}: "
+            f"{num_train + num_validation + num_test} > {num_rows}"
+        )
+
+    train_end = num_train
+    validation_end = num_train + num_validation
+    return {
+        "train": (0, train_end),
+        "validation": (max(0, train_end - sequence_length), validation_end),
+        "test": (max(0, validation_end - sequence_length), num_rows),
+    }
+
+
+def _fit_standardizer(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Fit a simple feature-wise standardizer."""
+    mean = values.mean(axis=0, keepdims=True).astype(np.float32)
+    std = values.std(axis=0, keepdims=True).astype(np.float32)
+    std = np.where(std < 1e-6, 1.0, std)
+    return mean, std
+
+
+def _standardize(values: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
+    """Apply feature-wise standardization."""
+    return ((values - mean) / std).astype(np.float32)
+
+
+def _build_ltsf_windows(
+    inputs: np.ndarray,
+    targets: np.ndarray,
+    *,
+    start: int,
+    end: int,
+    sequence_length: int,
+    prediction_length: int,
+    metadata: dict[str, object] | None = None,
+) -> DatasetSplit:
+    """Build sliding forecasting windows for one dataset split."""
+    num_examples = end - start - sequence_length - prediction_length + 1
+    if num_examples <= 0:
+        raise ValueError(
+            "Not enough rows to build forecasting windows with "
+            f"seq_len={sequence_length} and pred_len={prediction_length}"
+        )
+
+    window_inputs = np.empty(
+        (num_examples, sequence_length, inputs.shape[-1]),
+        dtype=np.float32,
+    )
+    window_targets = np.empty(
+        (num_examples, prediction_length, targets.shape[-1]),
+        dtype=np.float32,
+    )
+
+    for index in range(num_examples):
+        offset = start + index
+        window_inputs[index] = inputs[offset : offset + sequence_length]
+        target_start = offset + sequence_length
+        target_end = target_start + prediction_length
+        window_targets[index] = targets[target_start:target_end]
+
+    return DatasetSplit(window_inputs, window_targets, metadata or {})
+
+
+def _build_ltsf_dataset(
+    paths_config: PathsConfig,
+    dataset_config: DatasetConfig,
+) -> DatasetBundle:
+    """Build a long-term time-series forecasting dataset bundle from CSV."""
+    import pandas as pd
+
+    dataset_name = dataset_config.resolved_name
+    params = dataset_config.params
+    sequence_length = int(params.get("seq_len", 96))
+    prediction_length = int(params.get("pred_len", 96))
+    features_mode = str(params.get("features_mode", "M"))
+    target_column = str(params.get("target", "OT"))
+    include_time_features = params.get("time_features", "none") == "calendar"
+
+    dataset_path = resolve_dataset_path(paths_config, dataset_config)
+    csv_path = _resolve_ltsf_csv_path(dataset_path, dataset_name, params)
+    dataframe = pd.read_csv(csv_path)
+    if "date" not in dataframe.columns:
+        raise ValueError(f"LTSF dataset {csv_path} must contain a 'date' column")
+    dataframe["date"] = pd.to_datetime(dataframe["date"])
+
+    input_values, target_values, input_columns, target_columns = _resolve_ltsf_feature_arrays(
+        dataframe,
+        features_mode=features_mode,
+        target_column=target_column,
+        include_time_features=include_time_features,
+    )
+
+    split_ranges = _resolve_ltsf_split_ranges(
+        dataset_name=dataset_name,
+        num_rows=len(dataframe),
+        sequence_length=sequence_length,
+    )
+    train_input_end = split_ranges["train"][1]
+    train_target_end = split_ranges["train"][1]
+    input_mean, input_std = _fit_standardizer(input_values[:train_input_end])
+    target_mean, target_std = _fit_standardizer(target_values[:train_target_end])
+    scaled_inputs = _standardize(input_values, input_mean, input_std)
+    scaled_targets = _standardize(target_values, target_mean, target_std)
+
+    bundle_metadata = {
+        "dataset_path": str(csv_path),
+        "features_mode": features_mode,
+        "input_columns": input_columns,
+        "target_columns": target_columns,
+        "prediction_length": prediction_length,
+        "target_mean": target_mean.squeeze(0).astype(np.float32).tolist(),
+        "target_std": target_std.squeeze(0).astype(np.float32).tolist(),
+        "split_ranges": {name: [start, end] for name, (start, end) in split_ranges.items()},
+    }
+    split_metadata = {
+        "dataset_name": dataset_name,
+        "features_mode": features_mode,
+        "prediction_length": prediction_length,
+    }
+
+    train_split = _build_ltsf_windows(
+        scaled_inputs,
+        scaled_targets,
+        start=split_ranges["train"][0],
+        end=split_ranges["train"][1],
+        sequence_length=sequence_length,
+        prediction_length=prediction_length,
+        metadata={**split_metadata, "split": "train"},
+    )
+    validation_split = _build_ltsf_windows(
+        scaled_inputs,
+        scaled_targets,
+        start=split_ranges["validation"][0],
+        end=split_ranges["validation"][1],
+        sequence_length=sequence_length,
+        prediction_length=prediction_length,
+        metadata={**split_metadata, "split": "validation"},
+    )
+    test_split = _build_ltsf_windows(
+        scaled_inputs,
+        scaled_targets,
+        start=split_ranges["test"][0],
+        end=split_ranges["test"][1],
+        sequence_length=sequence_length,
+        prediction_length=prediction_length,
+        metadata={**split_metadata, "split": "test"},
+    )
+
+    return DatasetBundle(
+        name=dataset_name,
+        task="forecasting",
+        train=train_split,
+        validation=validation_split,
+        test=test_split,
+        input_dim=int(train_split.inputs.shape[-1]),
+        output_dim=int(train_split.targets.shape[-1]),
+        sequence_length=sequence_length,
+        metadata=bundle_metadata,
     )
 
 
@@ -338,6 +634,8 @@ def build_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig) -> D
         return _build_mnist_dataset(paths_config, dataset_config)
     if dataset_config.kind == "cifar10":
         return _build_cifar10_dataset(paths_config, dataset_config)
+    if dataset_config.kind == "ltsf":
+        return _build_ltsf_dataset(paths_config, dataset_config)
     if dataset_config.kind == "uea":
         return _build_uea_dataset(paths_config, dataset_config)
     raise ValueError(f"Unsupported dataset kind: {dataset_config.kind}")

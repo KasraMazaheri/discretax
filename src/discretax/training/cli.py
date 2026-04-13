@@ -58,8 +58,13 @@ def main() -> None:
                 "output_dir": str(result.output_dir),
                 "best_metric": result.best_metric,
                 "final_step": result.final_step,
-                "test_loss": result.test_loss,
-                "test_accuracy": result.test_accuracy,
+                "test_metrics": result.test_metrics,
+                **({"test_loss": result.test_loss} if result.test_loss is not None else {}),
+                **(
+                    {"test_accuracy": result.test_accuracy}
+                    if result.test_accuracy is not None
+                    else {}
+                ),
                 "mode": result.mode,
             },
             sort_keys=False,

@@ -1,0 +1,12 @@
+dataset:
+  kind: ltsf
+  name: ETTh1
+  root: LTSF
+  download: false
+  normalize: true
+  params:
+    seq_len: 96
+    pred_len: 96
+    features_mode: M
+    target: OT
+    time_features: calendar

@@ -36,6 +36,7 @@ class DatasetBundle:
     validation: DatasetSplit
     test: DatasetSplit
     input_dim: int
-    num_classes: int
+    output_dim: int
     sequence_length: int
+    num_classes: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

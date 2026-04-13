@@ -65,6 +65,7 @@ class S5(eqx.nn.StatefulLayer, PartialModule):
         step_rescale: float = 1.0,
         drop_rate: float = 0.1,
         prenorm: bool = True,
+        norm_type: str = "batchnorm",
         use_bias: bool = True,
         **kwargs,
     ):
@@ -85,6 +86,7 @@ class S5(eqx.nn.StatefulLayer, PartialModule):
             step_rescale: rescaling factor for the discretization step.
             drop_rate: dropout rate for blocks.
             prenorm: whether to apply prenorm in blocks.
+            norm_type: normalization type to use inside each block.
             use_bias: whether to use bias in GLU channel mixers.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
@@ -125,6 +127,7 @@ class S5(eqx.nn.StatefulLayer, PartialModule):
                 key=keys[2 * num_blocks + i],
                 drop_rate=drop_rate,
                 prenorm=prenorm,
+                norm_type=norm_type,
             )
             self.blocks.append(block)
 

@@ -1,0 +1,56 @@
+defaults:
+  - ../base
+  - ../datasets/ltsf
+  - ../models/linoss_forecasting
+
+name: etth1-linoss-smoke
+description: Smoke test for the unified long-term time-series forecasting pipeline on ETTh1.
+tags:
+  - smoke
+  - forecasting
+  - ltsf
+  - etth1
+  - linoss
+loader:
+  batch_size: 32
+  eval_batch_size: 64
+optimizer:
+  name: adamw
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  grad_clip_norm: 1.0
+  schedule:
+    name: constant
+trainer:
+  seed: 0
+  num_epochs: 1
+  max_steps: 10
+  log_every_steps: 1
+  eval_every_steps: 5
+  checkpoint_every_steps: 5
+dataset:
+  name: ETTh1
+  root: LTSF
+  params:
+    seq_len: 96
+    pred_len: 96
+    features_mode: M
+    target: OT
+    time_features: calendar
+model:
+  hidden_dim: 64
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 2
+      state_dim: 64
+      drop_rate: 0.0
+      prenorm: true
+      norm_type: layernorm
+checkpoint:
+  enabled: true
+  save_best: true
+  monitor: val_mse
+  mode: min
+wandb:
+  enabled: false

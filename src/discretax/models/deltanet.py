@@ -55,6 +55,7 @@ class DeltaNet(eqx.nn.StatefulLayer, PartialModule):
         chunk_size: int = 64,
         drop_rate: float = 0.1,
         prenorm: bool = True,
+        norm_type: str = "batchnorm",
         **kwargs,
     ):
         """Initialize the DeltaNet model.
@@ -70,6 +71,7 @@ class DeltaNet(eqx.nn.StatefulLayer, PartialModule):
                 divide the sequence length at inference time.
             drop_rate: Dropout rate for blocks.
             prenorm: Whether to apply prenorm in blocks.
+            norm_type: normalization type to use inside each block.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
@@ -99,6 +101,7 @@ class DeltaNet(eqx.nn.StatefulLayer, PartialModule):
                 key=keys[2 * num_blocks + i],
                 drop_rate=drop_rate,
                 prenorm=prenorm,
+                norm_type=norm_type,
             )
             self.blocks.append(block)
 

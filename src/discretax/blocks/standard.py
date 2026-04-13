@@ -40,11 +40,12 @@ class StandardBlock(AbstractBlock):
         prenorm: Whether to apply the normalization at the beginning or the end of the block.
     """
 
-    norm: eqx.nn.BatchNorm
+    norm: eqx.nn.BatchNorm | None
     sequence_mixer: AbstractSequenceMixer
     channel_mixer: AbstractChannelMixer
     drop: eqx.nn.Dropout
     prenorm: bool
+    norm_type: str = eqx.field(static=True)
 
     def __init__(
         self,
@@ -55,6 +56,7 @@ class StandardBlock(AbstractBlock):
         channel_mixer: Resolvable[AbstractChannelMixer],
         drop_rate: float = 0.1,
         prenorm: bool = True,
+        norm_type: str = "batchnorm",
         dtype: jnp.dtype = jnp.float32,
         **kwargs,
     ):
@@ -67,17 +69,22 @@ class StandardBlock(AbstractBlock):
             channel_mixer: the channel mixer instance for this block.
             drop_rate: dropout rate for the channel mixer.
             prenorm: whether to apply the normalization at the beginning or the end of the block.
+            norm_type: normalization type, one of "batchnorm" or "layernorm".
             dtype: compute dtype for block modules.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
         """
-        self.norm = eqx.nn.BatchNorm(
-            input_size=in_features,
-            axis_name="batch",
-            channelwise_affine=False,
-            dtype=dtype,
-            mode="ema",
-        )
+        if norm_type not in {"batchnorm", "layernorm"}:
+            raise ValueError("norm_type must be one of ['batchnorm', 'layernorm']")
+        self.norm = None
+        if norm_type == "batchnorm":
+            self.norm = eqx.nn.BatchNorm(
+                input_size=in_features,
+                axis_name="batch",
+                channelwise_affine=False,
+                dtype=dtype,
+                mode="ema",
+            )
 
         # Build the sequence mixer and channel mixer from the config or an instance.
         self.sequence_mixer = sequence_mixer.resolve(
@@ -95,6 +102,18 @@ class StandardBlock(AbstractBlock):
 
         self.drop = eqx.nn.Dropout(p=drop_rate)
         self.prenorm = prenorm
+        self.norm_type = norm_type
+
+    def _apply_norm(self, x: Array, state: eqx.nn.State) -> tuple[Array, eqx.nn.State]:
+        """Apply the configured normalization layer."""
+        if self.norm_type == "batchnorm":
+            if self.norm is None:
+                raise ValueError("BatchNorm layer is not initialized")
+            x, state = self.norm(x.T, state)
+            return x.T, state
+
+        x = jax.vmap(lambda y: jax.nn.standardize(y, axis=-1))(x)
+        return x, state
 
     def __call__(
         self,
@@ -115,15 +134,13 @@ class StandardBlock(AbstractBlock):
         key, dropkey1, dropkey2 = jr.split(key, 3)
         skip = x
         if self.prenorm:
-            x, state = self.norm(x.T, state)
-            x = x.T
+            x, state = self._apply_norm(x, state)
         x = self.sequence_mixer(x, key)
         x = self.drop(jax.nn.gelu(x), key=dropkey1)
         x = jax.vmap(self.channel_mixer)(x)
         x = self.drop(x, key=dropkey2)
         x = skip + x
         if not self.prenorm:
-            x, state = self.norm(x.T, state)
-            x = x.T
+            x, state = self._apply_norm(x, state)
 
         return x, state

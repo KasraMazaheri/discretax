@@ -35,7 +35,7 @@ from discretax.training.metadata import (
     finalize_run_metadata,
     tracker_runtime_summary,
 )
-from discretax.training.regularization import apply_batch_regularization
+from discretax.training.tasks import TaskOps, create_task_ops
 from discretax.utils.param_count import count_params
 
 
@@ -46,9 +46,18 @@ class RunResult:
     output_dir: Path
     best_metric: float
     final_step: int
-    test_loss: float
-    test_accuracy: float
+    test_metrics: dict[str, float]
     mode: str = "train"
+
+    @property
+    def test_loss(self) -> float | None:
+        """Return the primary loss-like test metric when available."""
+        return self.test_metrics.get("test_loss", self.test_metrics.get("test_mse"))
+
+    @property
+    def test_accuracy(self) -> float | None:
+        """Return classification test accuracy when available."""
+        return self.test_metrics.get("test_accuracy")
 
 
 @dataclass(slots=True)
@@ -268,6 +277,7 @@ def _evaluate(
     state: eqx.nn.State,
     dataset_bundle: DatasetBundle,
     experiment_config: ExperimentConfig,
+    task_ops: TaskOps,
     *,
     split_name: str,
     seed: int,
@@ -275,10 +285,13 @@ def _evaluate(
     """Evaluate a model on a dataset split."""
     split = getattr(dataset_bundle, split_name)
     if len(split) == 0:
-        return {f"{split_name}_loss": float("nan"), f"{split_name}_accuracy": float("nan")}
+        return {
+            f"{split_name}_{metric_name}": float("nan")
+            for metric_name in task_ops.eval_metric_names
+        }
 
-    losses: list[float] = []
-    accuracies: list[float] = []
+    aggregated_metrics = dict.fromkeys(task_ops.eval_metric_names, 0.0)
+    total_examples = 0
     for batch_index, (batch_inputs, batch_targets) in enumerate(
         batch_iterator(
             split,
@@ -288,15 +301,17 @@ def _evaluate(
             seed=seed,
         )
     ):
-        metrics = _eval_step(
+        metrics = task_ops.eval_step(
             model, state, batch_inputs, batch_targets, jr.PRNGKey(seed + batch_index)
         )
-        losses.append(float(metrics["loss"]))
-        accuracies.append(float(metrics["accuracy"]))
+        batch_size = int(batch_inputs.shape[0])
+        total_examples += batch_size
+        for metric_name in task_ops.eval_metric_names:
+            aggregated_metrics[metric_name] += float(metrics[metric_name]) * batch_size
 
     return {
-        f"{split_name}_loss": sum(losses) / len(losses),
-        f"{split_name}_accuracy": sum(accuracies) / len(accuracies),
+        f"{split_name}_{metric_name}": metric_total / total_examples
+        for metric_name, metric_total in aggregated_metrics.items()
     }
 
 
@@ -444,19 +459,19 @@ def _log_static_summary(
     model: eqx.nn.Sequential,
     run_metadata: dict[str, Any],
     experiment_config: ExperimentConfig,
+    task_ops: TaskOps,
 ) -> None:
     """Record static dataset and model metadata."""
     tracker.summary(
         {
             "dataset_name": dataset_bundle.name,
             "input_dim": dataset_bundle.input_dim,
+            "output_dim": dataset_bundle.output_dim,
             "sequence_length": dataset_bundle.sequence_length,
             "num_classes": dataset_bundle.num_classes,
             "parameter_count": count_params(model),
             "ema_enabled": experiment_config.ema.enabled,
-            "label_smoothing": experiment_config.regularization.label_smoothing,
-            "mixup_alpha": experiment_config.regularization.mixup_alpha,
-            "cutmix_alpha": experiment_config.regularization.cutmix_alpha,
+            **task_ops.static_summary,
             **tracker_runtime_summary(run_metadata),
         }
     )
@@ -508,6 +523,7 @@ def _run_eval_only(
     experiment_config: ExperimentConfig,
     *,
     dataset_bundle: DatasetBundle,
+    task_ops: TaskOps,
     runtime_state: _RuntimeState,
     output_dir: Path,
     tracker: Any,
@@ -522,6 +538,7 @@ def _run_eval_only(
         runtime_state.state,
         dataset_bundle,
         experiment_config,
+        task_ops,
         split_name="test",
         seed=experiment_config.trainer.seed + runtime_state.final_step + 1,
     )
@@ -548,8 +565,7 @@ def _run_eval_only(
         output_dir=output_dir,
         best_metric=runtime_state.best_metric,
         final_step=runtime_state.final_step,
-        test_loss=test_metrics["test_loss"],
-        test_accuracy=test_metrics["test_accuracy"],
+        test_metrics=test_metrics,
         mode="eval_only",
     )
 
@@ -558,6 +574,7 @@ def _maybe_run_evaluation(
     experiment_config: ExperimentConfig,
     *,
     dataset_bundle: DatasetBundle,
+    task_ops: TaskOps,
     runtime_state: _RuntimeState,
     output_dir: Path,
     tracker: Any,
@@ -577,6 +594,7 @@ def _maybe_run_evaluation(
         runtime_state.state,
         dataset_bundle,
         experiment_config,
+        task_ops,
         split_name=validation_split_name,
         seed=experiment_config.trainer.seed + runtime_state.final_step,
     )
@@ -672,6 +690,7 @@ def _finalize_training_run(
     experiment_config: ExperimentConfig,
     *,
     dataset_bundle: DatasetBundle,
+    task_ops: TaskOps,
     runtime_state: _RuntimeState,
     output_dir: Path,
     tracker: Any,
@@ -683,6 +702,7 @@ def _finalize_training_run(
         runtime_state.best_state,
         dataset_bundle,
         experiment_config,
+        task_ops,
         split_name="test",
         seed=experiment_config.trainer.seed + runtime_state.final_step + 1,
     )
@@ -710,10 +730,127 @@ def _finalize_training_run(
         output_dir=output_dir,
         best_metric=runtime_state.best_metric,
         final_step=runtime_state.final_step,
-        test_loss=test_metrics["test_loss"],
-        test_accuracy=test_metrics["test_accuracy"],
+        test_metrics=test_metrics,
         mode="train",
     )
+
+
+def _train_until_complete(
+    experiment_config: ExperimentConfig,
+    *,
+    dataset_bundle: DatasetBundle,
+    task_ops: TaskOps,
+    runtime_state: _RuntimeState,
+    output_dir: Path,
+    tracker: Any,
+    loop_key: jax.Array,
+    learning_rate_schedule: Any,
+    total_steps: int,
+    validation_split_name: str,
+) -> None:
+    """Run the main optimization loop until the configured step budget is exhausted."""
+    epoch = runtime_state.start_epoch
+    while runtime_state.final_step < total_steps:
+        if (
+            experiment_config.trainer.max_steps is None
+            and epoch >= experiment_config.trainer.num_epochs
+        ):
+            break
+        epoch_seed = experiment_config.trainer.seed + epoch
+        epoch_batches = list(
+            batch_iterator(
+                dataset_bundle.train,
+                experiment_config.loader.batch_size,
+                shuffle=experiment_config.loader.shuffle_train,
+                drop_last=experiment_config.loader.drop_last_train,
+                seed=epoch_seed,
+            )
+        )
+        batch_start_index = (
+            runtime_state.steps_to_skip_in_epoch if epoch == runtime_state.start_epoch else 0
+        )
+        for batch_inputs, batch_targets in epoch_batches[batch_start_index:]:
+            runtime_state.steps_to_skip_in_epoch = 0
+            if runtime_state.final_step >= total_steps:
+                break
+
+            step_started_at = perf_counter()
+            loop_key, batch_aug_key, step_key = jr.split(loop_key, 3)
+            prepared_batch = task_ops.prepare_train_batch(
+                batch_inputs,
+                batch_targets,
+                batch_aug_key,
+            )
+            (
+                runtime_state.model,
+                runtime_state.state,
+                runtime_state.opt_state,
+                train_metrics,
+            ) = task_ops.train_step(
+                runtime_state.model,
+                runtime_state.state,
+                runtime_state.opt_state,
+                prepared_batch.inputs,
+                (
+                    prepared_batch.hard_targets
+                    if hasattr(prepared_batch, "hard_targets")
+                    else prepared_batch.targets
+                ),
+                getattr(prepared_batch, "target_probs", None),
+                step_key,
+            )
+            step_duration_seconds = perf_counter() - step_started_at
+            runtime_state.final_step += 1
+            if runtime_state.ema_model is not None:
+                runtime_state.ema_model = update_ema_model(
+                    runtime_state.ema_model,
+                    runtime_state.model,
+                    decay=experiment_config.ema.decay,
+                )
+
+            step_metrics = {
+                "epoch": epoch,
+                "step": runtime_state.final_step,
+                "learning_rate": float(learning_rate_schedule(runtime_state.final_step - 1)),
+                "grad_norm": float(train_metrics["grad_norm"]),
+                "update_norm": float(train_metrics["update_norm"]),
+                "param_norm": float(train_metrics["param_norm"]),
+                "step_time_seconds": step_duration_seconds,
+                "examples_per_second": _safe_throughput(
+                    batch_inputs.shape[0],
+                    step_duration_seconds,
+                ),
+                "mix_augmentation_applied": float(getattr(prepared_batch, "applied", False)),
+                "mix_augmentation_lambda": float(getattr(prepared_batch, "lambda_value", 1.0)),
+            }
+            for metric_name in task_ops.train_metric_names:
+                step_metrics[f"train_{metric_name}"] = float(train_metrics[metric_name])
+
+            if runtime_state.final_step % experiment_config.trainer.log_every_steps == 0:
+                append_history(output_dir, step_metrics)
+                tracker.log(step_metrics, step=runtime_state.final_step)
+
+            _maybe_run_evaluation(
+                experiment_config,
+                dataset_bundle=dataset_bundle,
+                task_ops=task_ops,
+                runtime_state=runtime_state,
+                output_dir=output_dir,
+                tracker=tracker,
+                epoch=epoch,
+                validation_split_name=validation_split_name,
+            )
+            _maybe_save_progress_checkpoint(
+                experiment_config,
+                dataset_bundle=dataset_bundle,
+                runtime_state=runtime_state,
+                output_dir=output_dir,
+                epoch=epoch,
+            )
+
+        if runtime_state.final_step >= total_steps:
+            break
+        epoch += 1
 
 
 def run_experiment(
@@ -738,6 +875,7 @@ def run_experiment(
         model=model,
     )
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+    task_ops = create_task_ops(dataset_bundle, experiment_config, optimizer)
 
     runtime_state = _initialize_runtime_state(
         experiment_config,
@@ -770,13 +908,13 @@ def run_experiment(
     )
     write_run_metadata(output_dir, run_metadata)
 
-    train_step = _make_train_step(optimizer)
     _log_static_summary(
         tracker,
         dataset_bundle,
         runtime_state.model,
         run_metadata,
         experiment_config,
+        task_ops,
     )
 
     validation_split_name = "validation" if len(dataset_bundle.validation) > 0 else "test"
@@ -786,109 +924,30 @@ def run_experiment(
             return _run_eval_only(
                 experiment_config,
                 dataset_bundle=dataset_bundle,
+                task_ops=task_ops,
                 runtime_state=runtime_state,
                 output_dir=output_dir,
                 tracker=tracker,
                 run_metadata=run_metadata,
             )
 
-        for epoch in range(runtime_state.start_epoch, experiment_config.trainer.num_epochs):
-            epoch_seed = experiment_config.trainer.seed + epoch
-            epoch_batches = list(
-                batch_iterator(
-                    dataset_bundle.train,
-                    experiment_config.loader.batch_size,
-                    shuffle=experiment_config.loader.shuffle_train,
-                    drop_last=experiment_config.loader.drop_last_train,
-                    seed=epoch_seed,
-                )
-            )
-            batch_start_index = (
-                runtime_state.steps_to_skip_in_epoch if epoch == runtime_state.start_epoch else 0
-            )
-            for batch_inputs, batch_targets in epoch_batches[batch_start_index:]:
-                runtime_state.steps_to_skip_in_epoch = 0
-                if runtime_state.final_step >= total_steps:
-                    break
-
-                step_started_at = perf_counter()
-                loop_key, batch_aug_key, step_key = jr.split(loop_key, 3)
-                regularized_batch = apply_batch_regularization(
-                    batch_inputs,
-                    batch_targets,
-                    num_classes=dataset_bundle.num_classes,
-                    regularization_config=experiment_config.regularization,
-                    dataset_metadata=dataset_bundle.train.metadata,
-                    key=batch_aug_key,
-                )
-                (
-                    runtime_state.model,
-                    runtime_state.state,
-                    runtime_state.opt_state,
-                    train_metrics,
-                ) = train_step(
-                    runtime_state.model,
-                    runtime_state.state,
-                    runtime_state.opt_state,
-                    regularized_batch.inputs,
-                    regularized_batch.hard_targets,
-                    regularized_batch.target_probs,
-                    step_key,
-                )
-                step_duration_seconds = perf_counter() - step_started_at
-                runtime_state.final_step += 1
-                if runtime_state.ema_model is not None:
-                    runtime_state.ema_model = update_ema_model(
-                        runtime_state.ema_model,
-                        runtime_state.model,
-                        decay=experiment_config.ema.decay,
-                    )
-
-                step_metrics = {
-                    "epoch": epoch,
-                    "step": runtime_state.final_step,
-                    "learning_rate": float(learning_rate_schedule(runtime_state.final_step - 1)),
-                    "train_loss": float(train_metrics["loss"]),
-                    "train_accuracy": float(train_metrics["accuracy"]),
-                    "grad_norm": float(train_metrics["grad_norm"]),
-                    "update_norm": float(train_metrics["update_norm"]),
-                    "param_norm": float(train_metrics["param_norm"]),
-                    "step_time_seconds": step_duration_seconds,
-                    "examples_per_second": _safe_throughput(
-                        batch_inputs.shape[0],
-                        step_duration_seconds,
-                    ),
-                    "mix_augmentation_applied": float(regularized_batch.applied),
-                    "mix_augmentation_lambda": regularized_batch.lambda_value,
-                }
-
-                if runtime_state.final_step % experiment_config.trainer.log_every_steps == 0:
-                    append_history(output_dir, step_metrics)
-                    tracker.log(step_metrics, step=runtime_state.final_step)
-
-                _maybe_run_evaluation(
-                    experiment_config,
-                    dataset_bundle=dataset_bundle,
-                    runtime_state=runtime_state,
-                    output_dir=output_dir,
-                    tracker=tracker,
-                    epoch=epoch,
-                    validation_split_name=validation_split_name,
-                )
-                _maybe_save_progress_checkpoint(
-                    experiment_config,
-                    dataset_bundle=dataset_bundle,
-                    runtime_state=runtime_state,
-                    output_dir=output_dir,
-                    epoch=epoch,
-                )
-
-            if runtime_state.final_step >= total_steps:
-                break
+        _train_until_complete(
+            experiment_config,
+            dataset_bundle=dataset_bundle,
+            task_ops=task_ops,
+            runtime_state=runtime_state,
+            output_dir=output_dir,
+            tracker=tracker,
+            loop_key=loop_key,
+            learning_rate_schedule=learning_rate_schedule,
+            total_steps=total_steps,
+            validation_split_name=validation_split_name,
+        )
 
         return _finalize_training_run(
             experiment_config,
             dataset_bundle=dataset_bundle,
+            task_ops=task_ops,
             runtime_state=runtime_state,
             output_dir=output_dir,
             tracker=tracker,
