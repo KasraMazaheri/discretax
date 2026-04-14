@@ -1,0 +1,43 @@
+base_config: configs/experiments/etth1_linoss_optimized.yaml
+
+run_name:
+  prefix: discretax_etth1_heads_imex
+  include_keys:
+    - trainer.seed
+    - model.backbone.kwargs.num_heads
+    - optimizer.learning_rate
+    - model.backbone.kwargs.state_dim
+    - model.hidden_dim
+    - model.backbone.kwargs.num_blocks
+
+fixed:
+  name: discretax_etth1_heads_imex
+  model.backbone.kwargs.use_head_gating: false
+  model.backbone.kwargs.use_head_output_projection: true
+  wandb.enabled: true
+  wandb.mode: online
+  wandb.project: discretax-ltsf
+  wandb.group: discretax_etth1_heads_imex
+  wandb.job_type: train
+  wandb.tags:
+    - LinOSS
+    - ETTh1
+    - forecasting
+    - ltsf
+    - temporal-head
+    - revin
+    - no-patch
+    - heads
+    - projection
+    - no-gating
+    - family-imex
+
+grid:
+  trainer.seed:
+    - 0
+    - 1
+  model.backbone.kwargs.num_heads:
+    - 1
+    - 2
+    - 4
+    - 8

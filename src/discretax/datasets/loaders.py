@@ -419,7 +419,7 @@ def _resolve_ltsf_feature_arrays(
     features_mode: str,
     target_column: str,
     include_time_features: bool,
-) -> tuple[np.ndarray, np.ndarray, list[str], list[str]]:
+) -> tuple[np.ndarray, np.ndarray, list[str], list[str], list[int], int]:
     """Resolve input and target arrays for an LTSF dataset."""
     value_columns = [column for column in dataframe.columns if column != "date"]
     if target_column not in value_columns:
@@ -431,24 +431,36 @@ def _resolve_ltsf_feature_arrays(
         input_values = all_values[:, target_index : target_index + 1]
         target_values = input_values
         target_columns = [target_column]
+        target_indices = [0]
     elif features_mode == "MS":
         input_values = all_values
         target_values = all_values[:, target_index : target_index + 1]
         target_columns = [target_column]
+        target_indices = [target_index]
     elif features_mode == "M":
         input_values = all_values
         target_values = all_values
         target_columns = value_columns
+        target_indices = list(range(len(value_columns)))
     else:
         raise ValueError(f"Unsupported LTSF features_mode: {features_mode}")
 
     input_columns = list(value_columns if features_mode != "S" else [target_column])
+    num_time_features = 0
     if include_time_features:
         time_features = _calendar_time_features(dataframe["date"])
         input_values = np.concatenate([input_values, time_features], axis=-1)
         input_columns.extend(["month", "day", "weekday", "hour", "minute"])
+        num_time_features = int(time_features.shape[-1])
 
-    return input_values, target_values, input_columns, target_columns
+    return (
+        input_values,
+        target_values,
+        input_columns,
+        target_columns,
+        target_indices,
+        num_time_features,
+    )
 
 
 def _resolve_ltsf_split_ranges(
@@ -552,7 +564,14 @@ def _build_ltsf_dataset(
         raise ValueError(f"LTSF dataset {csv_path} must contain a 'date' column")
     dataframe["date"] = pd.to_datetime(dataframe["date"])
 
-    input_values, target_values, input_columns, target_columns = _resolve_ltsf_feature_arrays(
+    (
+        input_values,
+        target_values,
+        input_columns,
+        target_columns,
+        target_indices,
+        num_time_features,
+    ) = _resolve_ltsf_feature_arrays(
         dataframe,
         features_mode=features_mode,
         target_column=target_column,
@@ -576,7 +595,10 @@ def _build_ltsf_dataset(
         "features_mode": features_mode,
         "input_columns": input_columns,
         "target_columns": target_columns,
+        "target_indices": target_indices,
         "prediction_length": prediction_length,
+        "value_dim": int(input_values.shape[-1] - num_time_features),
+        "num_time_features": num_time_features,
         "target_mean": target_mean.squeeze(0).astype(np.float32).tolist(),
         "target_std": target_std.squeeze(0).astype(np.float32).tolist(),
         "split_ranges": {name: [start, end] for name, (start, end) in split_ranges.items()},

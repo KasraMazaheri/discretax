@@ -5,7 +5,7 @@ import jax
 import jax.random as jr
 import pytest
 
-from discretax.encoder import ImagePatchEncoder, LinearEncoder
+from discretax.encoder import ImagePatchEncoder, LinearEncoder, TimeSeriesPatchEncoder
 from discretax.heads.classification import ClassificationHead
 from discretax.models import LRU, S5, DeltaNet, LinOSS
 
@@ -233,3 +233,36 @@ def test_image_patch_encoder_with_linoss_forward():
     y, _ = batched_forward(x, jr.split(jr.PRNGKey(8), 2))
 
     assert y.shape == (2, 3)
+
+
+def test_time_series_patch_encoder_with_linoss_forward():
+    """A temporal patch encoder composes cleanly with LinOSS and a classifier head."""
+    key = jr.PRNGKey(9)
+    keys = jr.split(key, 3)
+
+    encoder = TimeSeriesPatchEncoder(
+        in_features=4,
+        out_features=16,
+        sequence_length=8,
+        patch_length=4,
+        patch_stride=2,
+        channel_independent=True,
+        value_dim=4,
+        key=keys[0],
+    )
+    linoss_model = LinOSS(hidden_dim=16, num_blocks=2, state_dim=16, drop_rate=0.0, key=keys[1])
+    head = ClassificationHead(in_features=16, out_features=3, key=keys[2])
+    model = eqx.nn.Sequential([encoder, linoss_model, head])
+
+    x = _dummy_input(batch_size=2, timesteps=8, in_features=4)
+    state = _dummy_state(model, batch_size=2)
+
+    def single_forward(x_single, key_single):
+        return model(x_single, state, key=key_single)
+
+    batched_forward = jax.vmap(single_forward, in_axes=(0, 0), axis_name="batch")
+    y, _ = batched_forward(x, jr.split(jr.PRNGKey(10), 2))
+
+    assert y.shape == (2, 3)
+    assert encoder.num_patches == 3
+    assert encoder.output_length == 12

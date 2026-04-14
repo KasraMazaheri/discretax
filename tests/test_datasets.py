@@ -285,5 +285,8 @@ def test_build_ltsf_dataset_from_csv(tmp_path: Path):
     assert len(dataset_bundle.test) == 5
     assert dataset_bundle.train.targets.shape[1:] == (2, 1)
     assert dataset_bundle.metadata["prediction_length"] == 2
+    assert dataset_bundle.metadata["target_indices"] == [0]
+    assert dataset_bundle.metadata["value_dim"] == 3
+    assert dataset_bundle.metadata["num_time_features"] == 5
     assert np.isfinite(dataset_bundle.train.inputs).all()
     assert np.isfinite(dataset_bundle.train.targets).all()

@@ -173,7 +173,7 @@ model:
       state_dim: 4
       drop_rate: 0.0
   head:
-    target: SequenceForecastHead
+    target: TemporalProjectionForecastHead
 checkpoint:
   enabled: true
   save_best: true
@@ -293,6 +293,25 @@ def test_run_forecasting_experiment_smoke(tmp_path: Path):
     assert result.output_dir.exists()
     assert jnp.isfinite(result.test_loss)
     assert jnp.isfinite(result.test_metrics["test_mae"])
+    assert jnp.isfinite(result.test_metrics["test_raw_mse"])
+    assert jnp.isfinite(result.test_metrics["test_raw_mae"])
+
+
+def test_run_forecasting_experiment_with_revin(tmp_path: Path):
+    """A tiny forecasting experiment can run with RevIN-style instance normalization."""
+    _write_tiny_ltsf_csv(tmp_path)
+    config = load_experiment_config(
+        _write_forecasting_runtime_config(tmp_path, max_steps=2),
+        overrides=[
+            "dataset.params.revin=true",
+            "dataset.params.revin_eps=1.0e-5",
+        ],
+    )
+    result = run_experiment(config)
+
+    assert result.final_step == 2
+    assert jnp.isfinite(result.test_metrics["test_mse"])
+    assert jnp.isfinite(result.test_metrics["test_raw_mse"])
 
 
 @pytest.mark.filterwarnings("ignore:Casting complex values to real discards the imaginary part")

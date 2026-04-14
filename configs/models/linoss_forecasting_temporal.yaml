@@ -1,0 +1,6 @@
+defaults:
+  - ./linoss_forecasting
+
+model:
+  head:
+    target: TemporalProjectionForecastHead

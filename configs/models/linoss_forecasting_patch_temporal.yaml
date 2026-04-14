@@ -1,0 +1,15 @@
+defaults:
+  - ./linoss_forecasting
+
+model:
+  encoder:
+    target: TimeSeriesPatchEncoder
+    kwargs:
+      patch_length: 16
+      patch_stride: 8
+      channel_independent: true
+      decomposition_kernel_size: 25
+      use_bias: false
+      use_positional_embedding: true
+  head:
+    target: ChannelIndependentTemporalProjectionForecastHead

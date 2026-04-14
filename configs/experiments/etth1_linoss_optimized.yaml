@@ -1,5 +1,6 @@
 defaults:
   - ./etth1_linoss_pilot
+  - ../models/linoss_forecasting_temporal
 
 name: etth1-linoss-optimized
 description: Stronger ETTh1 LinOSS baseline for follow-up forecasting experiments.
@@ -39,3 +40,8 @@ wandb:
     - etth1
     - linoss
     - optimized
+dataset:
+  params:
+    seq_len: 336
+    revin: true
+    revin_eps: 0.00001

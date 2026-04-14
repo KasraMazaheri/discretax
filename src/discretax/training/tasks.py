@@ -52,6 +52,36 @@ class TaskOps(TaskConfig):
     eval_step: Callable[..., dict[str, jax.Array]]
 
 
+def _split_forecasting_inputs(
+    batch_inputs: jax.Array,
+    *,
+    value_dim: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Split forecasting inputs into value channels and auxiliary channels."""
+    return batch_inputs[..., :value_dim], batch_inputs[..., value_dim:]
+
+
+def _forecasting_revin_stats(
+    batch_inputs: jax.Array,
+    *,
+    value_dim: int,
+    target_indices: tuple[int, ...],
+    eps: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Compute per-instance reversible normalization statistics for forecasting."""
+    value_inputs, aux_inputs = _split_forecasting_inputs(batch_inputs, value_dim=value_dim)
+    value_mean = jnp.mean(value_inputs, axis=1, keepdims=True)
+    value_var = jnp.mean(jnp.square(value_inputs - value_mean), axis=1, keepdims=True)
+    value_std = jnp.sqrt(value_var + eps)
+    normalized_inputs = (value_inputs - value_mean) / value_std
+    if aux_inputs.shape[-1] > 0:
+        normalized_inputs = jnp.concatenate([normalized_inputs, aux_inputs], axis=-1)
+    target_index_array = jnp.asarray(target_indices, dtype=jnp.int32)
+    target_mean = jnp.take(value_mean, target_index_array, axis=-1)
+    target_std = jnp.take(value_std, target_index_array, axis=-1)
+    return normalized_inputs, target_mean, target_std
+
+
 def _batched_forward(
     model: eqx.nn.Sequential,
     state: eqx.nn.State,
@@ -135,6 +165,15 @@ def resolve_task_config(
             head_kwargs={
                 "input_length": dataset_bundle.sequence_length,
                 "prediction_length": prediction_length,
+                "num_channels": int(
+                    dataset_bundle.metadata.get("value_dim", dataset_bundle.output_dim)
+                ),
+                "target_indices": tuple(
+                    dataset_bundle.metadata.get(
+                        "target_indices",
+                        range(dataset_bundle.output_dim),
+                    )
+                ),
             },
             train_metric_names=("loss", "mse", "mae"),
             eval_metric_names=("mse", "mae"),
@@ -268,6 +307,17 @@ def _forecasting_task(
     optimizer,
 ) -> TaskOps:
     """Build forecasting task ops."""
+    forecasting_params = dataset_bundle.metadata
+    value_dim = int(forecasting_params.get("value_dim", dataset_bundle.output_dim))
+    target_indices = tuple(
+        int(index)
+        for index in forecasting_params.get(
+            "target_indices",
+            range(dataset_bundle.output_dim),
+        )
+    )
+    revin_enabled = bool(dataset_bundle.metadata.get("revin_enabled", False))
+    revin_eps = float(dataset_bundle.metadata.get("revin_eps", 1e-5))
     target_mean = jnp.asarray(
         dataset_bundle.metadata.get("target_mean", [0.0] * dataset_bundle.output_dim),
         dtype=jnp.float32,
@@ -283,6 +333,14 @@ def _forecasting_task(
         key: jax.Array,
     ) -> PreparedBatch:
         del key
+        if revin_enabled:
+            batch_inputs, target_batch_mean, target_batch_std = _forecasting_revin_stats(
+                batch_inputs,
+                value_dim=value_dim,
+                target_indices=target_indices,
+                eps=revin_eps,
+            )
+            batch_targets = (batch_targets - target_batch_mean) / target_batch_std
         return PreparedBatch(inputs=batch_inputs, targets=batch_targets)
 
     @eqx.filter_value_and_grad(has_aux=True)
@@ -344,20 +402,37 @@ def _forecasting_task(
         key: jax.Array,
     ) -> dict[str, jax.Array]:
         inference_model = eqx.nn.inference_mode(model, value=True)
+        target_batch_mean = 0.0
+        target_batch_std = 1.0
+        if revin_enabled:
+            batch_inputs, target_batch_mean, target_batch_std = _forecasting_revin_stats(
+                batch_inputs,
+                value_dim=value_dim,
+                target_indices=target_indices,
+                eps=revin_eps,
+            )
         predictions, _ = _batched_forward(inference_model, state, batch_inputs, key)
-        # predictions = predictions.astype(jnp.float32) * target_std + target_mean
-        # targets = batch_targets.astype(jnp.float32) * target_std + target_mean
-        # mse, mae = _forecasting_metrics(predictions, targets)
-        mse, mae = _forecasting_metrics(predictions, batch_targets)
-        return {"mse": mse, "mae": mae}
+        predictions = predictions.astype(jnp.float32)
+        if revin_enabled:
+            predictions = predictions * target_batch_std + target_batch_mean
+        benchmark_targets = batch_targets.astype(jnp.float32)
+        mse, mae = _forecasting_metrics(predictions, benchmark_targets)
+        raw_predictions = predictions * target_std + target_mean
+        raw_targets = benchmark_targets * target_std + target_mean
+        raw_mse, raw_mae = _forecasting_metrics(raw_predictions, raw_targets)
+        return {"mse": mse, "mae": mae, "raw_mse": raw_mse, "raw_mae": raw_mae}
 
     return TaskOps(
         kind=task_config.kind,
         head_out_features=task_config.head_out_features,
         head_kwargs=task_config.head_kwargs,
         train_metric_names=task_config.train_metric_names,
-        eval_metric_names=task_config.eval_metric_names,
-        static_summary=task_config.static_summary,
+        eval_metric_names=("mse", "mae", "raw_mse", "raw_mae"),
+        static_summary={
+            **task_config.static_summary,
+            "revin_enabled": revin_enabled,
+            "revin_eps": revin_eps,
+        },
         prepare_train_batch=prepare_train_batch,
         train_step=train_step,
         eval_step=eval_step,

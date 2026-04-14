@@ -1,0 +1,74 @@
+defaults:
+  - ../base
+  - ../datasets/ltsf
+  - ../models/linoss_forecasting_patch_temporal
+
+name: etth1-linoss-patch-optimized
+description: ETTh1 LinOSS forecasting config with temporal patching, longer context, and RevIN.
+tags:
+  - forecasting
+  - ltsf
+  - etth1
+  - linoss
+  - patch
+  - revin
+loader:
+  batch_size: 64
+  eval_batch_size: 128
+optimizer:
+  name: adamw
+  learning_rate: 0.00005
+  weight_decay: 0.0
+  grad_clip_norm: 0.5
+  schedule:
+    name: warmup_cosine_decay
+    warmup_steps: 100
+    decay_steps: 50000
+    end_value: 0.000005
+trainer:
+  seed: 0
+  num_epochs: 100
+  max_steps: 50000
+  log_every_steps: 25
+  eval_every_steps: 250
+  checkpoint_every_steps: 5000
+dataset:
+  name: ETTh1
+  root: LTSF
+  params:
+    seq_len: 336
+    pred_len: 96
+    features_mode: M
+    target: OT
+    time_features: calendar
+    revin: true
+    revin_eps: 0.00001
+model:
+  hidden_dim: 256
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 4
+      state_dim: 256
+      num_heads: 1
+      use_head_gating: false
+      use_head_output_projection: false
+      drop_rate: 0.0
+      prenorm: true
+      norm_type: layernorm
+checkpoint:
+  enabled: true
+  save_best: true
+  monitor: val_mse
+  mode: min
+wandb:
+  enabled: true
+  mode: online
+  project: discretax-ltsf
+  group: etth1-linoss-patch-optimized
+  tags:
+    - forecasting
+    - etth1
+    - linoss
+    - patch
+    - revin
