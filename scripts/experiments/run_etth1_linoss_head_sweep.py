@@ -20,6 +20,8 @@ import yaml
 FAMILY_SWEEP_CONFIGS = {
     "im": "configs/sweeps/etth1_linoss_heads_im.yaml",
     "imex": "configs/sweeps/etth1_linoss_heads_imex.yaml",
+    "im_iso_param": "configs/sweeps/etth1_linoss_heads_iso_param_im.yaml",
+    "imex_iso_param": "configs/sweeps/etth1_linoss_heads_iso_param_imex.yaml",
 }
 
 
@@ -109,12 +111,36 @@ def _run_name(prefix: str, include_keys: list[str], overrides: dict[str, Any]) -
 def _build_jobs(sweep_config: dict[str, Any]) -> list[dict[str, Any]]:
     """Materialize the grid sweep into concrete override dictionaries."""
     fixed = dict(sweep_config.get("fixed", {}))
-    grid = sweep_config.get("grid", {})
-    grid_keys = list(grid)
-    grid_values = [grid[key] for key in grid_keys]
     run_name_config = sweep_config["run_name"]
     prefix = str(run_name_config["prefix"])
     include_keys = list(run_name_config["include_keys"])
+
+    explicit_jobs = sweep_config.get("jobs")
+    if explicit_jobs is not None:
+        jobs: list[dict[str, Any]] = []
+        for job_overrides in explicit_jobs:
+            overrides = dict(fixed)
+            overrides.update(dict(job_overrides))
+            run_name = _run_name(prefix, include_keys, overrides)
+            overrides["name"] = run_name
+            overrides["wandb.run_name"] = run_name
+
+            tags = list(overrides.get("wandb.tags", []))
+            if "model.backbone.kwargs.num_heads" in overrides:
+                tags.append(f"heads{overrides['model.backbone.kwargs.num_heads']}")
+            if "trainer.seed" in overrides:
+                tags.append(f"seed{overrides['trainer.seed']}")
+            if "model.hidden_dim" in overrides:
+                tags.append(f"hidden{overrides['model.hidden_dim']}")
+            if "model.backbone.kwargs.state_dim" in overrides:
+                tags.append(f"state{overrides['model.backbone.kwargs.state_dim']}")
+            overrides["wandb.tags"] = tags
+            jobs.append(overrides)
+        return jobs
+
+    grid = sweep_config.get("grid", {})
+    grid_keys = list(grid)
+    grid_values = [grid[key] for key in grid_keys]
 
     jobs: list[dict[str, Any]] = []
     for values in itertools.product(*grid_values):
