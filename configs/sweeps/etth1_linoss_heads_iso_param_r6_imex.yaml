@@ -1,0 +1,55 @@
+base_config: configs/experiments/etth1_linoss_optimized.yaml
+
+run_name:
+  prefix: discretax_etth1_heads_iso_param_r6_imex
+  include_keys:
+    - trainer.seed
+    - model.backbone.kwargs.num_heads
+    - model.hidden_dim
+    - model.backbone.kwargs.state_dim
+    - optimizer.learning_rate
+    - model.backbone.kwargs.num_blocks
+
+fixed:
+  name: discretax_etth1_heads_iso_param_r6_imex
+  model.backbone.kwargs.use_head_gating: false
+  model.backbone.kwargs.use_head_output_projection: true
+  trainer.max_steps: 50000
+  optimizer.schedule.decay_steps: 50000
+  wandb.enabled: true
+  wandb.mode: online
+  wandb.project: discretax-ltsf
+  wandb.group: discretax_etth1_heads_iso_param_r6
+  wandb.job_type: train
+  wandb.tags:
+    - LinOSS
+    - ETTh1
+    - forecasting
+    - ltsf
+    - temporal-head
+    - revin
+    - no-patch
+    - heads
+    - projection
+    - no-gating
+    - iso-param
+    - family-imex
+    - r6
+
+jobs:
+  - trainer.seed: 0
+    model.backbone.kwargs.num_heads: 1
+    model.hidden_dim: 1024
+    model.backbone.kwargs.state_dim: 1024
+  - trainer.seed: 1
+    model.backbone.kwargs.num_heads: 1
+    model.hidden_dim: 1024
+    model.backbone.kwargs.state_dim: 1024
+  - trainer.seed: 0
+    model.backbone.kwargs.num_heads: 8
+    model.hidden_dim: 1344
+    model.backbone.kwargs.state_dim: 1344
+  - trainer.seed: 1
+    model.backbone.kwargs.num_heads: 8
+    model.hidden_dim: 1344
+    model.backbone.kwargs.state_dim: 1344

@@ -1,7 +1,7 @@
 base_config: configs/experiments/etth1_linoss_optimized.yaml
 
 run_name:
-  prefix: discretax_etth1_heads_iso_param_r3_im
+  prefix: discretax_etth1_heads_iso_param_r6_im
   include_keys:
     - trainer.seed
     - model.backbone.kwargs.num_heads
@@ -11,17 +11,17 @@ run_name:
     - model.backbone.kwargs.num_blocks
 
 fixed:
-  name: discretax_etth1_heads_iso_param_r3_im
+  name: discretax_etth1_heads_iso_param_r6_im
   model.backbone.kwargs.discretization: IM
   model.backbone.kwargs.damping: false
   model.backbone.kwargs.use_head_gating: false
   model.backbone.kwargs.use_head_output_projection: true
-  trainer.max_steps: 25000
-  optimizer.schedule.decay_steps: 25000
+  trainer.max_steps: 50000
+  optimizer.schedule.decay_steps: 50000
   wandb.enabled: true
   wandb.mode: online
   wandb.project: discretax-ltsf
-  wandb.group: discretax_etth1_heads_iso_param_r3
+  wandb.group: discretax_etth1_heads_iso_param_r6
   wandb.job_type: train
   wandb.tags:
     - LinOSS
@@ -35,39 +35,23 @@ fixed:
     - projection
     - no-gating
     - iso-param
-    - rerun
     - family-im
+    - r6
 
 jobs:
   - trainer.seed: 0
     model.backbone.kwargs.num_heads: 1
-    model.hidden_dim: 256
-    model.backbone.kwargs.state_dim: 256
+    model.hidden_dim: 1024
+    model.backbone.kwargs.state_dim: 1024
   - trainer.seed: 1
     model.backbone.kwargs.num_heads: 1
-    model.hidden_dim: 256
-    model.backbone.kwargs.state_dim: 256
-  - trainer.seed: 0
-    model.backbone.kwargs.num_heads: 2
-    model.hidden_dim: 280
-    model.backbone.kwargs.state_dim: 280
-  - trainer.seed: 1
-    model.backbone.kwargs.num_heads: 2
-    model.hidden_dim: 280
-    model.backbone.kwargs.state_dim: 280
-  - trainer.seed: 0
-    model.backbone.kwargs.num_heads: 4
-    model.hidden_dim: 312
-    model.backbone.kwargs.state_dim: 312
-  - trainer.seed: 1
-    model.backbone.kwargs.num_heads: 4
-    model.hidden_dim: 312
-    model.backbone.kwargs.state_dim: 312
+    model.hidden_dim: 1024
+    model.backbone.kwargs.state_dim: 1024
   - trainer.seed: 0
     model.backbone.kwargs.num_heads: 8
-    model.hidden_dim: 336
-    model.backbone.kwargs.state_dim: 336
+    model.hidden_dim: 1344
+    model.backbone.kwargs.state_dim: 1344
   - trainer.seed: 1
     model.backbone.kwargs.num_heads: 8
-    model.hidden_dim: 336
-    model.backbone.kwargs.state_dim: 336
+    model.hidden_dim: 1344
+    model.backbone.kwargs.state_dim: 1344
