@@ -20,6 +20,9 @@ from jaxtyping import Array, PRNGKeyArray
 
 from discretax.sequence_mixers.base import AbstractSequenceMixer
 
+_PROJECTION_EPS = 0.01
+
+
 # --- Matrix Registry ----------------------------------
 
 
@@ -444,21 +447,21 @@ def _project_ag_oscillatory(discretization, A_diag, G_diag, steps):
         G_diag = nn.relu(G_diag)
         A_low = (2 + h * G_diag - 2 * jnp.sqrt(1 + h * G_diag)) / h2
         A_high = (2 + h * G_diag + 2 * jnp.sqrt(1 + h * G_diag)) / h2
-        A_diag = jnp.clip(A_diag, A_low, A_high)
+        A_diag = jnp.clip(A_diag, A_low, A_high * (1 - _PROJECTION_EPS))
     elif discretization == "IMEX2":
-        G_diag = jnp.clip(G_diag, 0.0, 1 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (1 / h) * (1 - _PROJECTION_EPS))
         A_low = (2 - h * G_diag - 2 * jnp.sqrt(1 - h * G_diag)) / h2
         A_high = (2 - h * G_diag + 2 * jnp.sqrt(1 - h * G_diag)) / h2
-        A_diag = jnp.clip(A_diag, A_low, A_high)
+        A_diag = jnp.clip(A_diag, A_low, A_high * (1 - _PROJECTION_EPS))
     elif discretization == "IMEX3":
-        G_diag = jnp.clip(G_diag, 0.0, 1 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (1 / h) * (1 - _PROJECTION_EPS))
         A_low = G_diag**2 / jnp.maximum(4 * (1 - h * G_diag), 1e-6)
         A_diag = A_low + nn.relu(A_diag - A_low)
     elif discretization == "EX":
-        G_diag = jnp.clip(G_diag, 0.0, 4 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (4 / h) * (1 - _PROJECTION_EPS))
         A_low = 1 / 4 * G_diag**2
         A_high = G_diag / h
-        A_diag = jnp.clip(A_diag, A_low, A_high)
+        A_diag = jnp.clip(A_diag, A_low, A_high * (1 - _PROJECTION_EPS))
 
     return A_diag, G_diag
 
@@ -485,20 +488,20 @@ def _project_ag_stability(discretization, A_diag, G_diag, steps):
     elif discretization == "IMEX":
         G_diag = nn.relu(G_diag)
         A_high = (4 + 2 * h * G_diag) / h2
-        A_diag = jnp.clip(A_diag, 0.0, A_high)
+        A_diag = jnp.clip(A_diag, 0.0, A_high * (1 - _PROJECTION_EPS))
     elif discretization == "IMEX2":
-        G_diag = jnp.clip(G_diag, 0.0, 2 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (2 / h) * (1 - _PROJECTION_EPS))
         A_high = (4 - 2 * h * G_diag) / h2
-        A_diag = jnp.clip(A_diag, 0.0, A_high)
+        A_diag = jnp.clip(A_diag, 0.0, A_high * (1 - _PROJECTION_EPS))
     elif discretization == "IMEX3":
         A_low_1 = (2 * h * G_diag - 4) / h2
         A_low_2 = -G_diag / h
         A_diag = jnp.maximum(jnp.maximum(jnp.maximum(A_diag, A_low_1), A_low_2), 0.0)
     elif discretization == "EX":
-        G_diag = jnp.clip(G_diag, 0.0, 4 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (4 / h) * (1 - _PROJECTION_EPS))
         A_low = nn.relu((2 * h * G_diag - 4) / h2)
         A_high = G_diag / h
-        A_diag = jnp.clip(A_diag, A_low, A_high)
+        A_diag = jnp.clip(A_diag, A_low, A_high * (1 - _PROJECTION_EPS))
 
     return A_diag, G_diag
 
