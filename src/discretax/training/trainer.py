@@ -125,52 +125,24 @@ def _regression_metrics(
     return mse, mae
 
 
-def _make_regression_train_step(optimizer):
-    """Create a compiled train-step function for regression tasks."""
+def _classification_loss(
+    log_probs: jax.Array, targets: tuple[jax.Array, jax.Array | None]
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    """Cross-entropy loss with accuracy reported as an extra metric.
 
-    @eqx.filter_value_and_grad(has_aux=True)
-    def _loss_fn(
-        model: eqx.nn.Sequential,
-        state: eqx.nn.State,
-        batch_inputs: jax.Array,
-        batch_targets: jax.Array,
-        key: jax.Array,
-    ) -> tuple[jax.Array, tuple[eqx.nn.State, jax.Array]]:
-        predictions, new_state = _batched_forward(model, state, batch_inputs, key)
-        loss, mae = _regression_metrics(predictions, batch_targets)
-        return loss, (new_state, mae)
+    `targets` is (hard_targets, target_probs); target_probs may be None.
+    """
+    hard_targets, target_probs = targets
+    loss, accuracy = _classification_metrics(log_probs, hard_targets, target_probs=target_probs)
+    return loss, {"accuracy": accuracy}
 
-    @eqx.filter_jit
-    def train_step(
-        model: eqx.nn.Sequential,
-        state: eqx.nn.State,
-        opt_state: optax.OptState,
-        batch_inputs: jax.Array,
-        batch_targets: jax.Array,
-        key: jax.Array,
-    ) -> tuple[eqx.nn.Sequential, eqx.nn.State, optax.OptState, dict[str, jax.Array]]:
-        (loss, (new_state, mae)), grads = _loss_fn(model, state, batch_inputs, batch_targets, key)
-        updates, new_opt_state = optimizer.update(
-            grads,
-            opt_state,
-            params=eqx.filter(model, eqx.is_inexact_array),
-        )
-        new_model = eqx.apply_updates(model, updates)
-        return (
-            new_model,
-            new_state,
-            new_opt_state,
-            {
-                "loss": loss,
-                "mse": loss,
-                "mae": mae,
-                "grad_norm": optax.global_norm(grads),
-                "update_norm": optax.global_norm(updates),
-                "param_norm": optax.global_norm(eqx.filter(model, eqx.is_inexact_array)),
-            },
-        )
 
-    return train_step
+def _regression_loss(
+    predictions: jax.Array, targets: jax.Array
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    """MSE loss with MAE reported as an extra metric."""
+    mse, mae = _regression_metrics(predictions, targets)
+    return mse, {"mse": mse, "mae": mae}
 
 
 def _safe_throughput(count: int, duration_seconds: float) -> float:
@@ -250,48 +222,25 @@ def _build_optimizer(
     return optax.chain(*transforms), learning_rate_schedule
 
 
-def _make_train_step(optimizer):
-    """Create a compiled train-step function for a specific optimizer."""
+def _make_train_step(optimizer, compute_loss):
+    """Create a compiled train-step function.
+
+    `compute_loss(model_output, targets) -> (scalar_loss, metrics_dict)`.
+    `targets` is any pytree; callers pass a single array for regression or a
+    `(hard_targets, target_probs)` tuple for classification.
+    """
 
     @eqx.filter_value_and_grad(has_aux=True)
-    def _loss_fn(
-        model: eqx.nn.Sequential,
-        state: eqx.nn.State,
-        batch_inputs: jax.Array,
-        hard_targets: jax.Array,
-        target_probs: jax.Array,
-        key: jax.Array,
-    ) -> tuple[jax.Array, tuple[eqx.nn.State, jax.Array]]:
-        log_probs, new_state = _batched_forward(model, state, batch_inputs, key)
-        loss, accuracy = _classification_metrics(
-            log_probs,
-            hard_targets,
-            target_probs=target_probs,
-        )
-        return loss, (new_state, accuracy)
+    def _loss_fn(model, state, batch_inputs, targets, key):
+        outputs, new_state = _batched_forward(model, state, batch_inputs, key)
+        loss, metrics = compute_loss(outputs, targets)
+        return loss, (new_state, metrics)
 
     @eqx.filter_jit
-    def train_step(
-        model: eqx.nn.Sequential,
-        state: eqx.nn.State,
-        opt_state: optax.OptState,
-        batch_inputs: jax.Array,
-        hard_targets: jax.Array,
-        target_probs: jax.Array,
-        key: jax.Array,
-    ) -> tuple[eqx.nn.Sequential, eqx.nn.State, optax.OptState, dict[str, jax.Array]]:
-        (loss, (new_state, accuracy)), grads = _loss_fn(
-            model,
-            state,
-            batch_inputs,
-            hard_targets,
-            target_probs,
-            key,
-        )
+    def train_step(model, state, opt_state, batch_inputs, targets, key):
+        (loss, (new_state, metrics)), grads = _loss_fn(model, state, batch_inputs, targets, key)
         updates, new_opt_state = optimizer.update(
-            grads,
-            opt_state,
-            params=eqx.filter(model, eqx.is_inexact_array),
+            grads, opt_state, params=eqx.filter(model, eqx.is_inexact_array)
         )
         new_model = eqx.apply_updates(model, updates)
         return (
@@ -300,7 +249,7 @@ def _make_train_step(optimizer):
             new_opt_state,
             {
                 "loss": loss,
-                "accuracy": accuracy,
+                **metrics,
                 "grad_norm": optax.global_norm(grads),
                 "update_norm": optax.global_norm(updates),
                 "param_norm": optax.global_norm(eqx.filter(model, eqx.is_inexact_array)),
@@ -310,34 +259,17 @@ def _make_train_step(optimizer):
     return train_step
 
 
-@eqx.filter_jit
-def _eval_step(
-    model: eqx.nn.Sequential,
-    state: eqx.nn.State,
-    batch_inputs: jax.Array,
-    batch_targets: jax.Array,
-    key: jax.Array,
-) -> dict[str, jax.Array]:
-    """Run a single evaluation step."""
-    inference_model = eqx.nn.inference_mode(model, value=True)
-    log_probs, _ = _batched_forward(inference_model, state, batch_inputs, key)
-    loss, accuracy = _classification_metrics(log_probs, batch_targets)
-    return {"loss": loss, "accuracy": accuracy}
+def _make_eval_step(compute_loss):
+    """Create a compiled eval-step. Mirrors `_make_train_step` without grads."""
 
+    @eqx.filter_jit
+    def eval_step(model, state, batch_inputs, targets, key):
+        inference_model = eqx.nn.inference_mode(model, value=True)
+        outputs, _ = _batched_forward(inference_model, state, batch_inputs, key)
+        loss, metrics = compute_loss(outputs, targets)
+        return {"loss": loss, **metrics}
 
-@eqx.filter_jit
-def _regression_eval_step(
-    model: eqx.nn.Sequential,
-    state: eqx.nn.State,
-    batch_inputs: jax.Array,
-    batch_targets: jax.Array,
-    key: jax.Array,
-) -> dict[str, jax.Array]:
-    """Run a single evaluation step for regression tasks."""
-    inference_model = eqx.nn.inference_mode(model, value=True)
-    predictions, _ = _batched_forward(inference_model, state, batch_inputs, key)
-    mse, mae = _regression_metrics(predictions, batch_targets)
-    return {"loss": mse, "mse": mse, "mae": mae}
+    return eval_step
 
 
 def _evaluate(
@@ -347,21 +279,24 @@ def _evaluate(
     experiment_config: ExperimentConfig,
     *,
     split_name: str,
+    metric_prefix: str,
     seed: int,
+    eval_step,
 ) -> dict[str, float]:
-    """Evaluate a model on a dataset split."""
+    """Evaluate a model on a dataset split; averages whatever `eval_step` returns.
+
+    Metric keys are prefixed with `metric_prefix` (semantic role — "val" or
+    "test") independent of `split_name` (the dataset attribute to read). This
+    lets a no-validation-split run still emit `val_*` during training.
+    """
     split = getattr(dataset_bundle, split_name)
     is_regression = dataset_bundle.task == "regression"
+    expected_keys = ("loss", "mse", "mae") if is_regression else ("loss", "accuracy")
     if len(split) == 0:
-        empty: dict[str, float] = {f"{split_name}_loss": float("nan")}
-        empty[f"{split_name}_mse" if is_regression else f"{split_name}_accuracy"] = float("nan")
-        if is_regression:
-            empty[f"{split_name}_mae"] = float("nan")
-        return empty
+        return {f"{metric_prefix}_{k}": float("nan") for k in expected_keys}
 
-    losses: list[float] = []
-    secondary: list[float] = []
-    maes: list[float] = []
+    sums: dict[str, float] = {}
+    num_batches = 0
     for batch_index, (batch_inputs, batch_targets) in enumerate(
         batch_iterator(
             split,
@@ -372,21 +307,13 @@ def _evaluate(
         )
     ):
         key = jr.PRNGKey(seed + batch_index)
-        if is_regression:
-            metrics = _regression_eval_step(model, state, batch_inputs, batch_targets, key)
-            maes.append(float(metrics["mae"]))
-        else:
-            metrics = _eval_step(model, state, batch_inputs, batch_targets, key)
-            secondary.append(float(metrics["accuracy"]))
-        losses.append(float(metrics["loss"]))
+        targets: Any = batch_targets if is_regression else (batch_targets, None)
+        metrics = eval_step(model, state, batch_inputs, targets, key)
+        for k, v in metrics.items():
+            sums[k] = sums.get(k, 0.0) + float(v)
+        num_batches += 1
 
-    result: dict[str, float] = {f"{split_name}_loss": sum(losses) / len(losses)}
-    if is_regression:
-        result[f"{split_name}_mse"] = sum(losses) / len(losses)
-        result[f"{split_name}_mae"] = sum(maes) / len(maes)
-    else:
-        result[f"{split_name}_accuracy"] = sum(secondary) / len(secondary)
-    return result
+    return {f"{metric_prefix}_{k}": v / num_batches for k, v in sums.items()}
 
 
 def _is_improved(value: float, best_value: float, mode: str) -> bool:
@@ -416,26 +343,19 @@ def _checkpoint_metadata(
     return metadata
 
 
-def _steps_per_epoch(dataset_bundle: DatasetBundle, experiment_config: ExperimentConfig) -> int:
-    """Return the deterministic number of train batches per epoch."""
-    return count_batches(
-        dataset_bundle.train,
-        experiment_config.loader.batch_size,
-        drop_last=experiment_config.loader.drop_last_train,
-    )
-
-
 def _resolve_total_steps(
     dataset_bundle: DatasetBundle,
     experiment_config: ExperimentConfig,
 ) -> int:
     """Resolve the total number of optimizer steps for a run."""
-    if experiment_config.trainer.max_steps is not None:
-        return experiment_config.trainer.max_steps
-    return experiment_config.trainer.num_epochs * _steps_per_epoch(
-        dataset_bundle,
-        experiment_config,
+    epoch_steps = experiment_config.trainer.num_epochs * count_batches(
+        dataset_bundle.train,
+        experiment_config.loader.batch_size,
+        drop_last=experiment_config.loader.drop_last_train,
     )
+    if experiment_config.trainer.max_steps is None:
+        return epoch_steps
+    return min(experiment_config.trainer.max_steps, epoch_steps)
 
 
 def _initialize_runtime_state(
@@ -491,7 +411,11 @@ def _initialize_runtime_state(
             resume_metadata.get("monitor_value", runtime_state.best_metric),
         )
     )
-    steps_per_epoch = _steps_per_epoch(dataset_bundle, experiment_config)
+    steps_per_epoch = count_batches(
+        dataset_bundle.train,
+        experiment_config.loader.batch_size,
+        drop_last=experiment_config.loader.drop_last_train,
+    )
     if steps_per_epoch == 0:
         return runtime_state
 
@@ -601,6 +525,7 @@ def _run_eval_only(
     output_dir: Path,
     tracker: Any,
     run_metadata: dict[str, Any],
+    eval_step,
 ) -> RunResult:
     """Evaluate a restored checkpoint without further training."""
     if runtime_state.checkpoint_dir is None or runtime_state.resume_metadata is None:
@@ -612,7 +537,9 @@ def _run_eval_only(
         dataset_bundle,
         experiment_config,
         split_name="test",
+        metric_prefix="test",
         seed=experiment_config.trainer.seed + runtime_state.final_step + 1,
+        eval_step=eval_step,
     )
     tracker.summary(
         {
@@ -653,11 +580,13 @@ def _maybe_run_evaluation(
     tracker: Any,
     epoch: int,
     validation_split_name: str,
+    eval_step,
+    total_steps: int,
 ) -> None:
     """Evaluate the current model, track metrics, and update best checkpoint state."""
     if (
         runtime_state.final_step % experiment_config.trainer.eval_every_steps != 0
-        and runtime_state.final_step != _resolve_total_steps(dataset_bundle, experiment_config)
+        and runtime_state.final_step != total_steps
     ):
         return
 
@@ -668,22 +597,22 @@ def _maybe_run_evaluation(
         dataset_bundle,
         experiment_config,
         split_name=validation_split_name,
+        metric_prefix="val",
         seed=experiment_config.trainer.seed + runtime_state.final_step,
+        eval_step=eval_step,
     )
     eval_duration_seconds = perf_counter() - eval_started_at
     split = getattr(dataset_bundle, validation_split_name)
     evaluation_metrics["step"] = runtime_state.final_step
-    evaluation_metrics[f"{validation_split_name}_duration_seconds"] = eval_duration_seconds
-    evaluation_metrics[f"{validation_split_name}_examples_per_second"] = _safe_throughput(
+    evaluation_metrics["val_duration_seconds"] = eval_duration_seconds
+    evaluation_metrics["val_examples_per_second"] = _safe_throughput(
         len(split),
         eval_duration_seconds,
     )
     append_history(output_dir, evaluation_metrics)
     tracker.log(evaluation_metrics, step=runtime_state.final_step)
 
-    monitored_value = evaluation_metrics[
-        f"{validation_split_name}_{experiment_config.checkpoint.monitor.removeprefix('val_')}"
-    ]
+    monitored_value = evaluation_metrics[experiment_config.checkpoint.monitor]
     if not _is_improved(
         monitored_value,
         runtime_state.best_metric,
@@ -717,16 +646,15 @@ def _maybe_run_evaluation(
 def _maybe_save_progress_checkpoint(
     experiment_config: ExperimentConfig,
     *,
-    dataset_bundle: DatasetBundle,
     runtime_state: _RuntimeState,
     output_dir: Path,
     epoch: int,
+    total_steps: int,
 ) -> None:
     """Persist latest and step checkpoints at configured save intervals."""
     if not experiment_config.checkpoint.enabled:
         return
 
-    total_steps = _resolve_total_steps(dataset_bundle, experiment_config)
     save_latest = runtime_state.final_step % experiment_config.trainer.checkpoint_every_steps == 0
     save_latest = save_latest or runtime_state.final_step == total_steps
     if not save_latest:
@@ -809,6 +737,7 @@ def _finalize_training_run(
     output_dir: Path,
     tracker: Any,
     run_metadata: dict[str, Any],
+    eval_step,
 ) -> RunResult:
     """Evaluate the best checkpoint on test data and write final outputs."""
     test_metrics = _evaluate(
@@ -817,7 +746,9 @@ def _finalize_training_run(
         dataset_bundle,
         experiment_config,
         split_name="test",
+        metric_prefix="test",
         seed=experiment_config.trainer.seed + runtime_state.final_step + 1,
+        eval_step=eval_step,
     )
     speed_summary = _compute_speed_summary(output_dir)
     parameter_count = count_params(runtime_state.best_model)
@@ -868,23 +799,9 @@ def _execute_train_step(
     step_key: Any,
 ) -> tuple[_RuntimeState, dict[str, Any]]:
     if is_regression:
-        (
-            runtime_state.model,
-            runtime_state.state,
-            runtime_state.opt_state,
-            raw_metrics,
-        ) = train_step(
-            runtime_state.model,
-            runtime_state.state,
-            runtime_state.opt_state,
-            batch_inputs,
-            batch_targets,
-            step_key,
-        )
-        extras: dict[str, Any] = {
-            "train_mse": float(raw_metrics["mse"]),
-            "train_mae": float(raw_metrics["mae"]),
-        }
+        step_inputs = batch_inputs
+        targets: Any = batch_targets
+        aug_extras: dict[str, Any] = {}
     else:
         regularized_batch = apply_batch_regularization(
             batch_inputs,
@@ -894,24 +811,35 @@ def _execute_train_step(
             dataset_metadata=dataset_bundle.train.metadata,
             key=batch_aug_key,
         )
-        (
-            runtime_state.model,
-            runtime_state.state,
-            runtime_state.opt_state,
-            raw_metrics,
-        ) = train_step(
-            runtime_state.model,
-            runtime_state.state,
-            runtime_state.opt_state,
-            regularized_batch.inputs,
-            regularized_batch.hard_targets,
-            regularized_batch.target_probs,
-            step_key,
-        )
-        extras = {
-            "train_accuracy": float(raw_metrics["accuracy"]),
+        step_inputs = regularized_batch.inputs
+        targets = (regularized_batch.hard_targets, regularized_batch.target_probs)
+        aug_extras = {
             "mix_augmentation_applied": float(regularized_batch.applied),
             "mix_augmentation_lambda": regularized_batch.lambda_value,
+        }
+
+    (
+        runtime_state.model,
+        runtime_state.state,
+        runtime_state.opt_state,
+        raw_metrics,
+    ) = train_step(
+        runtime_state.model,
+        runtime_state.state,
+        runtime_state.opt_state,
+        step_inputs,
+        targets,
+        step_key,
+    )
+    if is_regression:
+        extras: dict[str, Any] = {
+            "train_mse": float(raw_metrics["mse"]),
+            "train_mae": float(raw_metrics["mae"]),
+        }
+    else:
+        extras = {
+            "train_accuracy": float(raw_metrics["accuracy"]),
+            **aug_extras,
         }
     metrics: dict[str, Any] = {
         "loss": float(raw_metrics["loss"]),
@@ -978,9 +906,9 @@ def run_experiment(
     write_run_metadata(output_dir, run_metadata)
 
     is_regression = dataset_bundle.task == "regression"
-    train_step = (
-        _make_regression_train_step(optimizer) if is_regression else _make_train_step(optimizer)
-    )
+    compute_loss = _regression_loss if is_regression else _classification_loss
+    train_step = _make_train_step(optimizer, compute_loss)
+    eval_step = _make_eval_step(compute_loss)
     _log_static_summary(
         tracker,
         dataset_bundle,
@@ -1000,6 +928,7 @@ def run_experiment(
                 output_dir=output_dir,
                 tracker=tracker,
                 run_metadata=run_metadata,
+                eval_step=eval_step,
             )
 
         for epoch in range(runtime_state.start_epoch, experiment_config.trainer.num_epochs):
@@ -1073,13 +1002,15 @@ def run_experiment(
                     tracker=tracker,
                     epoch=epoch,
                     validation_split_name=validation_split_name,
+                    eval_step=eval_step,
+                    total_steps=total_steps,
                 )
                 _maybe_save_progress_checkpoint(
                     experiment_config,
-                    dataset_bundle=dataset_bundle,
                     runtime_state=runtime_state,
                     output_dir=output_dir,
                     epoch=epoch,
+                    total_steps=total_steps,
                 )
 
             if runtime_state.final_step >= total_steps:
@@ -1092,6 +1023,7 @@ def run_experiment(
             output_dir=output_dir,
             tracker=tracker,
             run_metadata=run_metadata,
+            eval_step=eval_step,
         )
     except Exception as error:
         write_run_metadata(
