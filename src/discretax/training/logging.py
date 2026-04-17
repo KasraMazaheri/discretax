@@ -24,7 +24,7 @@ def build_run_name(experiment_config: ExperimentConfig) -> str:
         f"{experiment_config.name}-"
         f"{experiment_config.dataset.resolved_name}-"
         f"{experiment_config.model.name}-"
-        f"seed{experiment_config.trainer.seed}"
+        f"seed{experiment_config.seed}"
     )
 
 

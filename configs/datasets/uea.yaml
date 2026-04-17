@@ -3,9 +3,9 @@ dataset:
   name: EigenWorms
   root: processed/UEA
   download: false
-  validation_split: 0.0
+  validation_split: 0.15
   sequence_layout: time_major
-  normalize: true
+  normalize: false
   seed: 0
   params:
     include_time: false

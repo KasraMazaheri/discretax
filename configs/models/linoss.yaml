@@ -16,13 +16,13 @@ model:
       drop_rate: 0.1
       prenorm: true
       discretization: IMEX
-      initialization: RT
+      initialization: AG
       damping: true
       stability: stable
-      r_min: 0.9
-      theta_max: 1.047 # pi / 3
       A_max: 1.0
       G_max: 1.0
+      r_min: 0.9
+      theta_max: 1.047 # pi / 3
   head:
     target: ClassificationHead
     kwargs:

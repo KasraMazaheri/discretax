@@ -4,6 +4,7 @@ defaults:
   - ../models/linoss
 
 name: mnist-linoss-baseline
+seed: 0
 description: Baseline LinOSS training run on MNIST with offline W&B logging.
 tags:
   - baseline
@@ -23,7 +24,6 @@ optimizer:
     decay_steps: 100
     end_value: 0.0001
 trainer:
-  seed: 0
   num_epochs: 1
   max_steps: 100
   log_every_steps: 10

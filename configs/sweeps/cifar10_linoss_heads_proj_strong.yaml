@@ -3,7 +3,7 @@ base_config: configs/experiments/cifar10_linoss_head_sweep_strong.yaml
 run_name:
   prefix: discretax_cifar10_heads_strong_im
   include_keys:
-    - trainer.seed
+    - seed
     - model.backbone.kwargs.num_heads
     - model.backbone.kwargs.use_head_output_projection
     - optimizer.learning_rate
@@ -46,7 +46,7 @@ fixed:
     - family-im
 
 grid:
-  trainer.seed:
+  seed:
     - 0
     - 1
   model.backbone.kwargs.num_heads:

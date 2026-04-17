@@ -372,6 +372,7 @@ class ExperimentConfig:
     name: str
     description: str | None
     tags: list[str]
+    seed: int
     paths: PathsConfig
     loader: DataloaderConfig
     dataset: DatasetConfig
@@ -391,6 +392,7 @@ class ExperimentConfig:
             "name",
             "description",
             "tags",
+            "seed",
             "paths",
             "loader",
             "dataset",
@@ -405,9 +407,13 @@ class ExperimentConfig:
         }
         _expect_keys(data, allowed_keys, context="experiment config")
 
+        seed = int(data.get("seed", 0))
+
         paths = PathsConfig(**data.get("paths", {}))
         loader = DataloaderConfig(**data.get("loader", {}))
-        dataset = DatasetConfig(**data["dataset"])
+        dataset_data = dict(data["dataset"])
+        dataset_data.pop("seed", None)
+        dataset = DatasetConfig(seed=seed, **dataset_data)
 
         model_data = data["model"]
         _expect_keys(
@@ -428,7 +434,9 @@ class ExperimentConfig:
         optimizer = OptimizerConfig(schedule=schedule, **optimizer_data)
         regularization = RegularizationConfig(**data.get("regularization", {}))
         ema = EMAConfig(**data.get("ema", {}))
-        trainer = TrainerConfig(**data.get("trainer", {}))
+        trainer_data = dict(data.get("trainer", {}))
+        trainer_data.pop("seed", None)
+        trainer = TrainerConfig(seed=seed, **trainer_data)
         precision = PrecisionConfig(**data.get("precision", {}))
         checkpoint = CheckpointConfig(**data.get("checkpoint", {}))
         wandb = WandbConfig(**data.get("wandb", {}))
@@ -445,6 +453,7 @@ class ExperimentConfig:
             name=name,
             description=data.get("description"),
             tags=tags,
+            seed=seed,
             paths=paths,
             loader=loader,
             dataset=dataset,

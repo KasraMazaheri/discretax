@@ -4,6 +4,7 @@ defaults:
   - ../models/linoss_image_patch
 
 name: cifar10-linoss-strong
+seed: 0
 description: CIFAR-10 LinOSS config with a stronger optimizer recipe, dataset pipeline, and image stem.
 tags:
   - LinOSS
@@ -31,36 +32,12 @@ regularization:
   mixup_alpha: 0.8
   cutmix_alpha: 1.0
   cutmix_switch_prob: 0.5
-ema:
-  enabled: true
-  decay: 0.9999
 model:
-  name: linoss
-  hidden_dim: 128
   backbone:
-    target: LinOSS
     kwargs:
-      num_blocks: 4
-      state_dim: 128
-      drop_rate: 0.1
-      num_heads: 1
-      use_head_gating: false
-      use_head_output_projection: false
-      prenorm: true
-      discretization: IM
-      damping: false
-      initialization: AG
-      projection: stable
       A_max: 16.0
       G_max: 8.0
-      r_min: 0.9
-      theta_max: 3.141592653589793
-  head:
-    target: ClassificationHead
-    kwargs:
-      reduce: true
 trainer:
-  seed: 0
   num_epochs: 300
   max_steps: 100000
   log_every_steps: 100
