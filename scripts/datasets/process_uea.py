@@ -1,127 +1,116 @@
-"""Convert raw UEA ARFF datasets into processed train/val/test pickles."""
+"""This script processes the UEA datasets and saves the processed data in data_dir/processed.
+
+It has been adapted to Jax from https://github.com/jambo6/neuralRDEs.
+"""
 
 from __future__ import annotations
 
 import argparse
+import os
 import pickle
 import warnings
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sktime.datasets import load_from_arff_to_dataframe
 from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SplitArrays = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+
+DEFAULT_DATASETS = {
+    "EigenWorms",
+    "EthanolConcentration",
+    "Heartbeat",
+    "MotorImagery",
+    "SelfRegulationSCP1",
+    "SelfRegulationSCP2",
+}
 
 
-def resolve_raw_dir(raw_root: Path) -> Path:
-    """Resolve the extracted UEA raw directory across archive naming variants."""
-    if raw_root.exists():
-        return raw_root
-
-    parent = raw_root.parent
-    for candidate in (parent / "Multivariate2018_arff", parent / "Multivariate_arff"):
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(f"Raw UEA directory does not exist: {raw_root}")
+def save_pickle(obj, filename):
+    """Saves a pickle object."""
+    with open(filename, "wb") as handle:
+        pickle.dump(obj, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def save_pickle(path: Path, value: object) -> None:
-    """Persist a Python object as a pickle."""
-    with path.open("wb") as file:
-        pickle.dump(value, file, protocol=pickle.HIGHEST_PROTOCOL)
+def create_jax_data(train_file, test_file):
+    """Creates jax tensors for test and training from the UCR arff format.
 
+    Args:
+        train_file (str): The location of the training data arff file.
+        test_file (str): The location of the testing data arff file.
 
-def dataframe_to_numpy(dataframe: pd.DataFrame) -> np.ndarray:
-    """Convert a UEA dataframe row into a dense NumPy tensor."""
-    expanded = dataframe.map(lambda series: series.values).values
-    return np.stack([np.vstack(row).T for row in expanded]).astype(np.float32)
-
-
-def load_uea_split(train_file: Path, test_file: Path) -> SplitArrays:
-    """Load a raw UEA dataset from ARFF files."""
+    Returns:
+        data_train, data_test, labels_train, labels_test: All as jax tensors.
+    """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=pd.errors.PerformanceWarning)
-        train_frame, train_labels = load_from_arff_to_dataframe(str(train_file))
-        test_frame, test_labels = load_from_arff_to_dataframe(str(test_file))
+        train_data, train_labels = load_from_arff_to_dataframe(train_file)
+        test_data, test_labels = load_from_arff_to_dataframe(test_file)
 
-    train_inputs = dataframe_to_numpy(train_frame)
-    test_inputs = dataframe_to_numpy(test_frame)
+    def convert_data(data):
+        data_expand = data.map(lambda x: x.values).values
+        data_numpy = np.stack([np.vstack(x).T for x in data_expand])
+        data_jnumpy = jnp.array(data_numpy)
+        return data_jnumpy
 
-    label_encoder = LabelEncoder().fit(train_labels)
-    train_targets = label_encoder.transform(train_labels).astype(np.int32)
-    test_targets = label_encoder.transform(test_labels).astype(np.int32)
-    return train_inputs, test_inputs, train_targets, test_targets
+    train_data, test_data = convert_data(train_data), convert_data(test_data)
 
+    encoder = LabelEncoder().fit(train_labels)
+    train_labels, test_labels = encoder.transform(train_labels), encoder.transform(test_labels)
+    train_labels, test_labels = jnp.array(train_labels), jnp.array(test_labels)
 
-def create_validation_split(
-    train_inputs: np.ndarray,
-    train_targets: np.ndarray,
-    *,
-    validation_fraction: float,
-    seed: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Split the training set into train and validation partitions."""
-    if validation_fraction <= 0.0:
-        empty_inputs = np.empty((0, *train_inputs.shape[1:]), dtype=train_inputs.dtype)
-        empty_targets = np.empty((0,), dtype=train_targets.dtype)
-        return train_inputs, empty_inputs, train_targets, empty_targets
-
-    train_x, val_x, train_y, val_y = train_test_split(
-        train_inputs,
-        train_targets,
-        test_size=validation_fraction,
-        random_state=seed,
-        stratify=train_targets,
-    )
-    return train_x, val_x, train_y, val_y
+    return train_data, test_data, train_labels, test_labels
 
 
-def process_dataset(
-    dataset_dir: Path,
-    *,
-    output_root: Path,
-    validation_fraction: float,
-    seed: int,
-) -> None:
-    """Process a single UEA dataset directory."""
-    dataset_name = dataset_dir.name
-    train_file = dataset_dir / f"{dataset_name}_TRAIN.arff"
-    test_file = dataset_dir / f"{dataset_name}_TEST.arff"
-    if not train_file.exists() or not test_file.exists():
-        return
+def convert_all_files(arff_folder: str, output_root: str, datasets: set[str]) -> None:
+    """Convert UEA files into jax data to be stored in /processed."""
+    for ds_name in tqdm(
+        [x for x in os.listdir(arff_folder) if os.path.isdir(arff_folder + "/" + x)]
+    ):
+        if ds_name not in datasets:
+            continue
 
-    output_dir = output_root / dataset_name
-    output_dir.mkdir(parents=True, exist_ok=True)
+        train_file = arff_folder + f"/{ds_name}/{ds_name}_TRAIN.arff"
+        test_file = arff_folder + f"/{ds_name}/{ds_name}_TEST.arff"
 
-    train_inputs, test_inputs, train_targets, test_targets = load_uea_split(train_file, test_file)
-    train_x, val_x, train_y, val_y = create_validation_split(
-        train_inputs,
-        train_targets,
-        validation_fraction=validation_fraction,
-        seed=seed,
-    )
+        save_dir = output_root + f"/{ds_name}"
 
-    combined_inputs = np.concatenate([train_inputs, test_inputs], axis=0)
-    combined_targets = np.concatenate([train_targets, test_targets], axis=0)
-    original_indices = (
-        np.arange(train_inputs.shape[0], dtype=np.int32),
-        np.arange(train_inputs.shape[0], combined_inputs.shape[0], dtype=np.int32),
-    )
+        if any(
+            x.split("/")[-1] not in os.listdir(arff_folder + f"/{ds_name}")
+            for x in (train_file, test_file)
+        ):
+            print(f"No files found for folder: {ds_name}")
+            continue
+        elif os.path.isdir(save_dir):
+            print(f"Files already exist for: {ds_name}")
+            continue
+        else:
+            os.makedirs(save_dir)
+            train_data, test_data, train_labels, test_labels = create_jax_data(
+                train_file, test_file
+            )
+            data = jnp.concatenate([train_data, test_data])
+            labels = jnp.concatenate([train_labels, test_labels])
 
-    save_pickle(output_dir / "X_train.pkl", train_x)
-    save_pickle(output_dir / "y_train.pkl", train_y)
-    save_pickle(output_dir / "X_val.pkl", val_x)
-    save_pickle(output_dir / "y_val.pkl", val_y)
-    save_pickle(output_dir / "X_test.pkl", test_inputs)
-    save_pickle(output_dir / "y_test.pkl", test_targets)
-    save_pickle(output_dir / "data.pkl", combined_inputs)
-    save_pickle(output_dir / "labels.pkl", combined_targets)
-    save_pickle(output_dir / "original_idxs.pkl", original_indices)
+            unique_rows, indices, inverse_indices = np.unique(
+                data, axis=0, return_index=True, return_inverse=True
+            )
+            data = data[indices]
+            labels = labels[indices]
+            print(f"Deleting {len(inverse_indices) - len(indices)} repeated samples in {ds_name}")
+
+            original_idxs = (
+                jnp.arange(0, train_data.shape[0]),
+                jnp.arange(train_data.shape[0], data.shape[0]),
+            )
+
+            save_pickle(data, save_dir + "/data.pkl")
+            save_pickle(labels, save_dir + "/labels.pkl")
+            save_pickle(original_idxs, save_dir + "/original_idxs.pkl")
 
 
 def main() -> int:
@@ -143,41 +132,16 @@ def main() -> int:
         "--dataset",
         action="append",
         default=[],
-        help="Process only the named dataset. Repeat the flag to process multiple datasets.",
-    )
-    parser.add_argument(
-        "--validation-fraction",
-        type=float,
-        default=0.1,
-        help="Fraction of the training set to reserve for validation.",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=0,
-        help="Random seed used for train/validation splitting.",
+        help="Process only the named dataset. Repeat to process multiple. "
+        "Defaults to the 6 standard datasets.",
     )
     args = parser.parse_args()
 
-    raw_dir = resolve_raw_dir(args.raw_dir)
-    if not 0.0 <= args.validation_fraction < 1.0:
-        raise ValueError("--validation-fraction must be in the range [0.0, 1.0)")
-
-    dataset_dirs = [path for path in sorted(raw_dir.iterdir()) if path.is_dir()]
-    if args.dataset:
-        requested = set(args.dataset)
-        dataset_dirs = [path for path in dataset_dirs if path.name in requested]
-
+    datasets = set(args.dataset) if args.dataset else DEFAULT_DATASETS
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    for dataset_dir in tqdm(dataset_dirs, desc="Processing UEA datasets"):
-        process_dataset(
-            dataset_dir,
-            output_root=args.output_dir,
-            validation_fraction=args.validation_fraction,
-            seed=args.seed,
-        )
+    convert_all_files(str(args.raw_dir), str(args.output_dir), datasets)
 
-    print(f"raw_dir: {raw_dir}")
+    print(f"raw_dir: {args.raw_dir}")
     print(f"processed_dir: {args.output_dir}")
     return 0
 
