@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from discretax.datasets.base import DatasetBundle, DatasetSplit
-from discretax.datasets.images import (
+from discretax.datasets.batching import (
     CIFAR10_CHANNEL_MEAN,
     CIFAR10_CHANNEL_STD,
     pack_image_sequences,
@@ -26,6 +26,11 @@ def resolve_dataset_path(paths_config: PathsConfig, dataset_config: DatasetConfi
     if dataset_root.is_absolute():
         return dataset_root
     return data_root / dataset_root
+
+
+# ---------------------------------------------------------------------------
+# Image datasets (MNIST, CIFAR-10)
+# ---------------------------------------------------------------------------
 
 
 def _split_train_validation(
@@ -49,25 +54,6 @@ def _split_train_validation(
         DatasetSplit(train_inputs[train_idx], train_targets[train_idx]),
         DatasetSplit(train_inputs[validation_idx], train_targets[validation_idx]),
     )
-
-
-def _standardize_with_train_stats(
-    train_split: DatasetSplit,
-    validation_split: DatasetSplit,
-    test_split: DatasetSplit,
-) -> tuple[DatasetSplit, DatasetSplit, DatasetSplit]:
-    """Standardize all splits using training-set statistics."""
-    mean = train_split.inputs.mean(axis=(0, 1), keepdims=True)
-    std = train_split.inputs.std(axis=(0, 1), keepdims=True)
-    std = np.where(std < 1e-6, 1.0, std)
-
-    def _normalize(split: DatasetSplit) -> DatasetSplit:
-        return DatasetSplit(
-            inputs=((split.inputs - mean) / std).astype(np.float32),
-            targets=split.targets.astype(np.int32),
-        )
-
-    return _normalize(train_split), _normalize(validation_split), _normalize(test_split)
 
 
 def _image_split_metadata(
@@ -234,6 +220,11 @@ def _build_cifar10_dataset(
     )
 
 
+# ---------------------------------------------------------------------------
+# Time-series datasets (UEA, PPG)
+# ---------------------------------------------------------------------------
+
+
 def _load_pickle(path: Path) -> np.ndarray:
     """Load a pickle file and convert it to a NumPy array."""
     with path.open("rb") as file:
@@ -274,7 +265,26 @@ def _labels_to_int(labels: np.ndarray) -> np.ndarray:
     raise ValueError(f"Unsupported UEA label shape: {labels.shape}")
 
 
-def _maybe_add_time_channel(inputs: np.ndarray) -> np.ndarray:
+def _standardize_with_train_stats(
+    train_split: DatasetSplit,
+    validation_split: DatasetSplit,
+    test_split: DatasetSplit,
+) -> tuple[DatasetSplit, DatasetSplit, DatasetSplit]:
+    """Standardize all splits using training-set statistics."""
+    mean = train_split.inputs.mean(axis=(0, 1), keepdims=True)
+    std = train_split.inputs.std(axis=(0, 1), keepdims=True)
+    std = np.where(std < 1e-6, 1.0, std)
+
+    def _normalize(split: DatasetSplit) -> DatasetSplit:
+        return DatasetSplit(
+            inputs=((split.inputs - mean) / std).astype(np.float32),
+            targets=split.targets.astype(np.int32),
+        )
+
+    return _normalize(train_split), _normalize(validation_split), _normalize(test_split)
+
+
+def _add_time_channel(inputs: np.ndarray) -> np.ndarray:
     """Prepend a normalized time channel to time-series inputs."""
     num_examples, sequence_length, _ = inputs.shape
     time_channel = np.linspace(0.0, 1.0, sequence_length, dtype=np.float32)
@@ -289,17 +299,26 @@ def _build_uea_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig)
         dataset_config.resolved_name,
     )
 
-    train_inputs = _load_pickle(dataset_root / "X_train.pkl").astype(np.float32)
-    validation_inputs = _load_pickle(dataset_root / "X_val.pkl").astype(np.float32)
-    test_inputs = _load_pickle(dataset_root / "X_test.pkl").astype(np.float32)
-    train_targets = _labels_to_int(_load_pickle(dataset_root / "y_train.pkl"))
-    validation_targets = _labels_to_int(_load_pickle(dataset_root / "y_val.pkl"))
-    test_targets = _labels_to_int(_load_pickle(dataset_root / "y_test.pkl"))
+    data = _load_pickle(dataset_root / "data.pkl").astype(np.float32)
+    labels = _labels_to_int(_load_pickle(dataset_root / "labels.pkl"))
+
+    rng = np.random.default_rng(dataset_config.seed)
+    perm = rng.permutation(len(data))
+    n = len(data)
+    n_train = int(0.70 * n)
+    n_val = int(0.15 * n)
+
+    train_inputs = data[perm[:n_train]]
+    train_targets = labels[perm[:n_train]]
+    validation_inputs = data[perm[n_train : n_train + n_val]]
+    validation_targets = labels[perm[n_train : n_train + n_val]]
+    test_inputs = data[perm[n_train + n_val :]]
+    test_targets = labels[perm[n_train + n_val :]]
 
     if dataset_config.params.get("include_time", False):
-        train_inputs = _maybe_add_time_channel(train_inputs)
-        validation_inputs = _maybe_add_time_channel(validation_inputs)
-        test_inputs = _maybe_add_time_channel(test_inputs)
+        train_inputs = _add_time_channel(train_inputs)
+        validation_inputs = _add_time_channel(validation_inputs)
+        test_inputs = _add_time_channel(test_inputs)
 
     train_split = DatasetSplit(train_inputs, train_targets)
     validation_split = DatasetSplit(validation_inputs, validation_targets)
@@ -348,9 +367,9 @@ def _build_ppg_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig)
     test_targets = _load_pickle(dataset_root / "y_test.pkl").astype(np.float32)[:, :, np.newaxis]
 
     if dataset_config.params.get("include_time", False):
-        train_inputs = _maybe_add_time_channel(train_inputs)
-        validation_inputs = _maybe_add_time_channel(validation_inputs)
-        test_inputs = _maybe_add_time_channel(test_inputs)
+        train_inputs = _add_time_channel(train_inputs)
+        validation_inputs = _add_time_channel(validation_inputs)
+        test_inputs = _add_time_channel(test_inputs)
 
     return DatasetBundle(
         name=dataset_config.resolved_name,
@@ -362,6 +381,11 @@ def _build_ppg_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig)
         output_dim=1,
         sequence_length=int(train_inputs.shape[1]),
     )
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 
 def build_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig) -> DatasetBundle:

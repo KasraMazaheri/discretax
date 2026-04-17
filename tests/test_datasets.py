@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from discretax.datasets import DatasetSplit, batch_iterator, build_dataset
-from discretax.datasets.images import pack_image_sequences
+from discretax.datasets.batching import pack_image_sequences
 from discretax.training import DatasetConfig, PathsConfig
 
 
