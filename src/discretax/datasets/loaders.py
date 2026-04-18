@@ -513,14 +513,16 @@ def _build_ltsf_windows(
     end: int,
     sequence_length: int,
     prediction_length: int,
+    prediction_offset: int = 0,
     metadata: dict[str, object] | None = None,
 ) -> DatasetSplit:
     """Build sliding forecasting windows for one dataset split."""
-    num_examples = end - start - sequence_length - prediction_length + 1
+    num_examples = end - start - sequence_length - prediction_offset - prediction_length + 1
     if num_examples <= 0:
         raise ValueError(
             "Not enough rows to build forecasting windows with "
-            f"seq_len={sequence_length} and pred_len={prediction_length}"
+            f"seq_len={sequence_length}, pred_len={prediction_length}, "
+            f"prediction_offset={prediction_offset}"
         )
 
     window_inputs = np.empty(
@@ -535,7 +537,7 @@ def _build_ltsf_windows(
     for index in range(num_examples):
         offset = start + index
         window_inputs[index] = inputs[offset : offset + sequence_length]
-        target_start = offset + sequence_length
+        target_start = offset + sequence_length + prediction_offset
         target_end = target_start + prediction_length
         window_targets[index] = targets[target_start:target_end]
 
@@ -553,6 +555,7 @@ def _build_ltsf_dataset(
     params = dataset_config.params
     sequence_length = int(params.get("seq_len", 96))
     prediction_length = int(params.get("pred_len", 96))
+    prediction_offset = int(params.get("prediction_offset", 0))
     features_mode = str(params.get("features_mode", "M"))
     target_column = str(params.get("target", "OT"))
     include_time_features = params.get("time_features", "none") == "calendar"
@@ -597,6 +600,7 @@ def _build_ltsf_dataset(
         "target_columns": target_columns,
         "target_indices": target_indices,
         "prediction_length": prediction_length,
+        "prediction_offset": prediction_offset,
         "value_dim": int(input_values.shape[-1] - num_time_features),
         "num_time_features": num_time_features,
         "target_mean": target_mean.squeeze(0).astype(np.float32).tolist(),
@@ -616,6 +620,7 @@ def _build_ltsf_dataset(
         end=split_ranges["train"][1],
         sequence_length=sequence_length,
         prediction_length=prediction_length,
+        prediction_offset=prediction_offset,
         metadata={**split_metadata, "split": "train"},
     )
     validation_split = _build_ltsf_windows(
@@ -625,6 +630,7 @@ def _build_ltsf_dataset(
         end=split_ranges["validation"][1],
         sequence_length=sequence_length,
         prediction_length=prediction_length,
+        prediction_offset=prediction_offset,
         metadata={**split_metadata, "split": "validation"},
     )
     test_split = _build_ltsf_windows(
@@ -634,6 +640,7 @@ def _build_ltsf_dataset(
         end=split_ranges["test"][1],
         sequence_length=sequence_length,
         prediction_length=prediction_length,
+        prediction_offset=prediction_offset,
         metadata={**split_metadata, "split": "test"},
     )
 

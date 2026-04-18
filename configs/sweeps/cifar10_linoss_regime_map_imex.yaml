@@ -1,0 +1,73 @@
+base_config: configs/experiments/cifar10_linoss_head_sweep_strong.yaml
+
+run_name:
+  prefix: discretax_cifar10_linoss_regime_map_imex
+  include_keys:
+    - trainer.seed
+    - model.hidden_dim
+    - model.backbone.kwargs.state_dim
+    - model.backbone.kwargs.num_heads
+    - model.backbone.kwargs.use_head_output_projection
+
+fixed:
+  name: discretax_cifar10_linoss_regime_map_imex
+  trainer.max_steps: 100000
+  trainer.log_every_steps: 100
+  trainer.eval_every_steps: 500
+  trainer.checkpoint_every_steps: 4000
+  precision.mode: float32
+  model.backbone.kwargs.num_blocks: 4
+  model.backbone.kwargs.discretization: IMEX
+  model.backbone.kwargs.initialization: AG
+  model.backbone.kwargs.damping: true
+  model.backbone.kwargs.stability: stable
+  model.backbone.kwargs.A_max: 16.0
+  model.backbone.kwargs.G_max: 8.0
+  model.backbone.kwargs.r_min: 0.9
+  model.backbone.kwargs.theta_max: 3.141592653589793
+  model.backbone.kwargs.drop_rate: 0.1
+  model.backbone.kwargs.use_head_gating: false
+  wandb.enabled: true
+  wandb.mode: online
+  wandb.project: discretax
+  wandb.group: discretax_cifar10_linoss_regime_map
+  wandb.job_type: train
+  wandb.tags:
+    - LinOSS
+    - Cifar10
+    - regime-map
+    - image-stem
+    - cosine
+    - augmentation
+    - mixup-cutmix
+    - ema
+    - family-imex
+    - ag-init
+    - stable-projection
+    - amax16
+    - gmax8
+
+grid:
+  trainer.seed:
+    - 0
+    - 1
+    - 2
+    - 3
+  model.hidden_dim:
+    - 256
+    - 512
+    - 1024
+  model.backbone.kwargs.state_dim:
+    - 256
+    - 512
+    - 1024
+  model.backbone.kwargs.num_heads:
+    - 1
+    - 8
+  model.backbone.kwargs.use_head_output_projection:
+    - false
+    - true
+
+exclude:
+  - model.backbone.kwargs.num_heads: 1
+    model.backbone.kwargs.use_head_output_projection: true

@@ -1,0 +1,72 @@
+defaults:
+  - ../base
+  - ../datasets/uea
+  - ../models/linoss
+
+name: uea-linoss-regime-base
+description: Base UEA LinOSS regime-mapping experiment for multi-head and projection studies.
+tags:
+  - uea
+  - classification
+  - linoss
+  - multihead
+  - projection
+  - regime-map
+paths:
+  data_root: data
+  output_root: outputs
+loader:
+  batch_size: 16
+  eval_batch_size: 32
+optimizer:
+  name: adamw
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  grad_clip_norm: 1.0
+  schedule:
+    name: warmup_cosine_decay
+    warmup_steps: 50
+    decay_steps: 5000
+    end_value: 0.00003
+model:
+  name: linoss
+  hidden_dim: 256
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 4
+      state_dim: 256
+      num_heads: 1
+      use_head_gating: false
+      use_head_output_projection: false
+      drop_rate: 0.1
+      prenorm: true
+  head:
+    target: ClassificationHead
+    kwargs:
+      reduce: true
+trainer:
+  seed: 0
+  num_epochs: 200
+  max_steps:
+  log_every_steps: 10
+  eval_every_steps: 50
+  checkpoint_every_steps: 200
+checkpoint:
+  monitor: val_accuracy
+  mode: max
+wandb:
+  enabled: true
+  mode: online
+  project: discretax
+  group: discretax_uea_linoss_regime
+  job_type: train
+  tags:
+    - uea
+    - classification
+    - linoss
+    - multihead
+    - projection
+    - regime-map
+dataset:
+  name: EigenWorms

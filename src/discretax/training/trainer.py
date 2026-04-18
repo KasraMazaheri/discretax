@@ -796,7 +796,11 @@ def _train_until_complete(
                     if hasattr(prepared_batch, "hard_targets")
                     else prepared_batch.targets
                 ),
-                getattr(prepared_batch, "target_probs", None),
+                getattr(
+                    prepared_batch,
+                    "aux_targets",
+                    getattr(prepared_batch, "target_probs", None),
+                ),
                 step_key,
             )
             step_duration_seconds = perf_counter() - step_started_at

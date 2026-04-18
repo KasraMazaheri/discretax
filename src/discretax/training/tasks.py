@@ -25,6 +25,7 @@ class PreparedBatch:
 
     inputs: jax.Array
     targets: jax.Array
+    aux_targets: Any | None = None
     applied: bool = False
     lambda_value: float = 1.0
 
@@ -175,7 +176,7 @@ def resolve_task_config(
                     )
                 ),
             },
-            train_metric_names=("loss", "mse", "mae"),
+            train_metric_names=("loss", "mse", "mae", "benchmark_mse", "benchmark_mae"),
             eval_metric_names=("mse", "mae"),
             static_summary={
                 "output_dim": dataset_bundle.output_dim,
@@ -333,6 +334,7 @@ def _forecasting_task(
         key: jax.Array,
     ) -> PreparedBatch:
         del key
+        benchmark_targets = batch_targets
         if revin_enabled:
             batch_inputs, target_batch_mean, target_batch_std = _forecasting_revin_stats(
                 batch_inputs,
@@ -341,7 +343,10 @@ def _forecasting_task(
                 eps=revin_eps,
             )
             batch_targets = (batch_targets - target_batch_mean) / target_batch_std
-        return PreparedBatch(inputs=batch_inputs, targets=batch_targets)
+            aux_targets = (benchmark_targets, target_batch_mean, target_batch_std)
+        else:
+            aux_targets = benchmark_targets
+        return PreparedBatch(inputs=batch_inputs, targets=batch_targets, aux_targets=aux_targets)
 
     @eqx.filter_value_and_grad(has_aux=True)
     def _loss_fn(
@@ -362,10 +367,9 @@ def _forecasting_task(
         opt_state: optax.OptState,
         batch_inputs: jax.Array,
         batch_targets: jax.Array,
-        batch_aux_targets: jax.Array | None,
+        batch_aux_targets: Any,
         key: jax.Array,
     ) -> tuple[eqx.nn.Sequential, eqx.nn.State, optax.OptState, dict[str, jax.Array]]:
-        del batch_aux_targets
         (loss, (new_state, mae)), grads = _loss_fn(
             model,
             state,
@@ -373,6 +377,21 @@ def _forecasting_task(
             batch_targets,
             key,
         )
+
+        if revin_enabled:
+            benchmark_targets, target_batch_mean, target_batch_std = batch_aux_targets
+            predictions, _ = _batched_forward(model, state, batch_inputs, key)
+            predictions = predictions.astype(jnp.float32)
+            benchmark_predictions = predictions * target_batch_std + target_batch_mean
+            benchmark_mse, benchmark_mae = _forecasting_metrics(
+                benchmark_predictions,
+                benchmark_targets,
+            )
+        else:
+            benchmark_targets = batch_aux_targets
+            predictions, _ = _batched_forward(model, state, batch_inputs, key)
+            benchmark_mse, benchmark_mae = _forecasting_metrics(predictions, benchmark_targets)
+
         updates, new_opt_state = optimizer.update(
             grads,
             opt_state,
@@ -387,6 +406,8 @@ def _forecasting_task(
                 "loss": loss,
                 "mse": loss,
                 "mae": mae,
+                "benchmark_mse": benchmark_mse,
+                "benchmark_mae": benchmark_mae,
                 "grad_norm": optax.global_norm(grads),
                 "update_norm": optax.global_norm(updates),
                 "param_norm": optax.global_norm(eqx.filter(model, eqx.is_inexact_array)),
