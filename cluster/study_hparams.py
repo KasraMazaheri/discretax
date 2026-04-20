@@ -66,7 +66,7 @@ ACCURACY_SPEC = MetricSpec(
     value_format=lambda v: f"{v * 100:.1f}%",
     std_format=lambda s: f"±{s * 100:.1f}",
     vmin=0.5,
-    vmax=0.7,
+    vmax=1.0,
 )
 
 MSE_SPEC = MetricSpec(
@@ -99,7 +99,7 @@ RESULT_COLS: frozenset[str] = frozenset(
         "test_loss",
         "test_mse",
         "test_mae",
-        "best_metric",
+        "best_val_metric",
         "final_step",
         "duration_seconds",
         "parameter_count",
@@ -134,7 +134,7 @@ def _load_sweep(sweeps_root: Path, sweep_name: str) -> pd.DataFrame:
         print(f"Warning: no completed results in {sweep_dir}")
         return pd.DataFrame()
     df = pd.DataFrame(results)
-    for col in ("test_accuracy", "test_loss", "test_mse", "test_mae", "best_metric", "score"):
+    for col in ("test_accuracy", "test_loss", "test_mse", "test_mae", "best_val_metric", "score"):
         if col in df.columns:
             df[col] = df[col].replace([float("inf"), float("-inf")], float("nan"))
     return df

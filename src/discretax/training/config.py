@@ -307,6 +307,7 @@ class TrainerConfig:
     log_every_steps: int = 10
     eval_every_steps: int = 100
     checkpoint_every_steps: int = 100
+    early_stopping_patience: int | None = None
     jit: bool = True
 
     def __post_init__(self) -> None:
@@ -321,6 +322,8 @@ class TrainerConfig:
             raise ValueError("trainer.eval_every_steps must be positive")
         if self.checkpoint_every_steps <= 0:
             raise ValueError("trainer.checkpoint_every_steps must be positive")
+        if self.early_stopping_patience is not None and self.early_stopping_patience <= 0:
+            raise ValueError("trainer.early_stopping_patience must be positive when provided")
 
 
 @dataclass(slots=True)

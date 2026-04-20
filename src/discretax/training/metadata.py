@@ -125,7 +125,7 @@ def finalize_run_metadata(
     ended_at: datetime,
     status: str,
     final_step: int,
-    best_metric: float | None = None,
+    best_val_metric: float | None = None,
     error: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return finalized run metadata for a completed invocation."""
@@ -135,8 +135,8 @@ def finalize_run_metadata(
     started_at = datetime.fromisoformat(metadata["started_at"].replace("Z", "+00:00"))
     finalized["duration_seconds"] = (ended_at - started_at).total_seconds()
     finalized["final_step"] = final_step
-    if best_metric is not None:
-        finalized["best_metric"] = best_metric
+    if best_val_metric is not None:
+        finalized["best_val_metric"] = best_val_metric
     if error is not None:
         finalized["error"] = error
     return finalized

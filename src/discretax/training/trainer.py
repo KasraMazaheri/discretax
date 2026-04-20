@@ -46,7 +46,7 @@ class RunResult:
     """Summary of a completed experiment run."""
 
     output_dir: Path
-    best_metric: float
+    best_val_metric: float
     final_step: int
     test_loss: float
     test_metric: float  # accuracy for classification, MSE for regression
@@ -61,9 +61,11 @@ class _RuntimeState:
     ema_model: eqx.nn.Sequential | None
     state: eqx.nn.State
     opt_state: optax.OptState
-    best_metric: float
+    best_val_metric: float
     best_model: eqx.nn.Sequential
     best_state: eqx.nn.State
+    evals_without_improvement: int
+    should_stop_early: bool
     final_step: int
     start_epoch: int
     steps_to_skip_in_epoch: int
@@ -327,7 +329,7 @@ def _checkpoint_metadata(
     *,
     epoch: int,
     step: int,
-    best_metric: float,
+    best_val_metric: float,
     monitor: str,
     monitor_value: float | None = None,
 ) -> dict[str, Any]:
@@ -335,7 +337,7 @@ def _checkpoint_metadata(
     metadata: dict[str, Any] = {
         "epoch": epoch,
         "step": step,
-        "best_metric": best_metric,
+        "best_val_metric": best_val_metric,
         "monitor": monitor,
     }
     if monitor_value is not None:
@@ -386,15 +388,17 @@ def _initialize_runtime_state(
             opt_state_like=opt_state,
         )
 
-    best_metric = float("inf") if experiment_config.checkpoint.mode == "min" else float("-inf")
+    best_val_metric = float("inf") if experiment_config.checkpoint.mode == "min" else float("-inf")
     runtime_state = _RuntimeState(
         model=model,
         ema_model=ema_model,
         state=state,
         opt_state=opt_state,
-        best_metric=best_metric,
+        best_val_metric=best_val_metric,
         best_model=model,
         best_state=state,
+        evals_without_improvement=0,
+        should_stop_early=False,
         final_step=0,
         start_epoch=0,
         steps_to_skip_in_epoch=0,
@@ -405,10 +409,13 @@ def _initialize_runtime_state(
         return runtime_state
 
     runtime_state.final_step = int(resume_metadata["step"])
-    runtime_state.best_metric = float(
+    runtime_state.best_val_metric = float(
         resume_metadata.get(
-            "best_metric",
-            resume_metadata.get("monitor_value", runtime_state.best_metric),
+            "best_val_metric",
+            resume_metadata.get(
+                "best_metric",
+                resume_metadata.get("monitor_value", runtime_state.best_val_metric),
+            ),
         )
     )
     steps_per_epoch = count_batches(
@@ -487,7 +494,7 @@ def _write_completed_run_artifacts(
     run_metadata: dict[str, Any],
     summary: dict[str, Any],
     final_step: int,
-    best_metric: float,
+    best_val_metric: float,
 ) -> None:
     """Write completion metadata and finalize the tracker."""
     finalized_metadata = finalize_run_metadata(
@@ -495,7 +502,7 @@ def _write_completed_run_artifacts(
         ended_at=datetime.now(UTC),
         status="completed",
         final_step=final_step,
-        best_metric=best_metric,
+        best_val_metric=best_val_metric,
     )
     write_run_metadata(output_dir, finalized_metadata)
     tracker.summary(
@@ -558,12 +565,12 @@ def _run_eval_only(
             **test_metrics,
         },
         final_step=runtime_state.final_step,
-        best_metric=runtime_state.best_metric,
+        best_val_metric=runtime_state.best_val_metric,
     )
     secondary_key = "test_mse" if dataset_bundle.task == "regression" else "test_accuracy"
     return RunResult(
         output_dir=output_dir,
-        best_metric=runtime_state.best_metric,
+        best_val_metric=runtime_state.best_val_metric,
         final_step=runtime_state.final_step,
         test_loss=test_metrics["test_loss"],
         test_metric=test_metrics[secondary_key],
@@ -615,12 +622,17 @@ def _maybe_run_evaluation(
     monitored_value = evaluation_metrics[experiment_config.checkpoint.monitor]
     if not _is_improved(
         monitored_value,
-        runtime_state.best_metric,
+        runtime_state.best_val_metric,
         experiment_config.checkpoint.mode,
     ):
+        runtime_state.evals_without_improvement += 1
+        patience = experiment_config.trainer.early_stopping_patience
+        if patience is not None and runtime_state.evals_without_improvement >= patience:
+            runtime_state.should_stop_early = True
         return
 
-    runtime_state.best_metric = monitored_value
+    runtime_state.evals_without_improvement = 0
+    runtime_state.best_val_metric = monitored_value
     runtime_state.best_model = _evaluation_model(runtime_state)
     runtime_state.best_state = runtime_state.state
     if not (experiment_config.checkpoint.enabled and experiment_config.checkpoint.save_best):
@@ -636,7 +648,7 @@ def _maybe_run_evaluation(
         metadata=_checkpoint_metadata(
             epoch=epoch,
             step=runtime_state.final_step,
-            best_metric=runtime_state.best_metric,
+            best_val_metric=runtime_state.best_val_metric,
             monitor=experiment_config.checkpoint.monitor,
             monitor_value=monitored_value,
         ),
@@ -663,7 +675,7 @@ def _maybe_save_progress_checkpoint(
     metadata = _checkpoint_metadata(
         epoch=epoch,
         step=runtime_state.final_step,
-        best_metric=runtime_state.best_metric,
+        best_val_metric=runtime_state.best_val_metric,
         monitor=experiment_config.checkpoint.monitor,
     )
     save_checkpoint(
@@ -754,10 +766,11 @@ def _finalize_training_run(
     parameter_count = count_params(runtime_state.best_model)
     tracker.summary(
         {
-            "best_metric": runtime_state.best_metric,
+            "best_val_metric": runtime_state.best_val_metric,
             **test_metrics,
             "final_step": runtime_state.final_step,
             "parameter_count": parameter_count,
+            "stopped_early": runtime_state.should_stop_early,
             **speed_summary,
         }
     )
@@ -767,19 +780,20 @@ def _finalize_training_run(
         run_metadata=run_metadata,
         summary={
             "mode": "train",
-            "best_metric": runtime_state.best_metric,
+            "best_val_metric": runtime_state.best_val_metric,
             "final_step": runtime_state.final_step,
             "parameter_count": parameter_count,
+            "stopped_early": runtime_state.should_stop_early,
             **test_metrics,
             **speed_summary,
         },
         final_step=runtime_state.final_step,
-        best_metric=runtime_state.best_metric,
+        best_val_metric=runtime_state.best_val_metric,
     )
     secondary_key = "test_mse" if dataset_bundle.task == "regression" else "test_accuracy"
     return RunResult(
         output_dir=output_dir,
-        best_metric=runtime_state.best_metric,
+        best_val_metric=runtime_state.best_val_metric,
         final_step=runtime_state.final_step,
         test_loss=test_metrics["test_loss"],
         test_metric=test_metrics[secondary_key],
@@ -1013,7 +1027,10 @@ def run_experiment(
                     total_steps=total_steps,
                 )
 
-            if runtime_state.final_step >= total_steps:
+                if runtime_state.should_stop_early:
+                    break
+
+            if runtime_state.final_step >= total_steps or runtime_state.should_stop_early:
                 break
 
         return _finalize_training_run(
@@ -1033,7 +1050,7 @@ def run_experiment(
                 ended_at=datetime.now(UTC),
                 status="failed",
                 final_step=runtime_state.final_step,
-                best_metric=runtime_state.best_metric,
+                best_val_metric=runtime_state.best_val_metric,
                 error={
                     "type": type(error).__name__,
                     "message": str(error),

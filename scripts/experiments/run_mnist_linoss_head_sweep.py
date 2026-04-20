@@ -35,7 +35,7 @@ class VariantSummary:
     use_head_output_projection: bool
     use_head_gating: bool
     output_dir: str
-    best_metric: float
+    best_val_metric: float
     final_step: int
     test_loss: float
     test_metric: float
@@ -189,7 +189,7 @@ def _run_variant(config_path: str, variant: SweepVariant) -> VariantSummary:
         use_head_output_projection=variant.use_head_output_projection,
         use_head_gating=variant.use_head_gating,
         output_dir=str(result.output_dir),
-        best_metric=result.best_metric,
+        best_val_metric=result.best_val_metric,
         final_step=result.final_step,
         test_loss=result.test_loss,
         test_metric=result.test_metric,
@@ -237,7 +237,7 @@ def main() -> None:
     enhancement_variants: list[SweepVariant] = []
     if multi_head_summaries:
         best_multi_head_summary = min(
-            multi_head_summaries, key=lambda summary: summary.best_metric
+            multi_head_summaries, key=lambda summary: summary.best_val_metric
         )
         best_multi_head_variant = SweepVariant(
             label=best_multi_head_summary.label,
@@ -253,7 +253,7 @@ def main() -> None:
     output_path = Path(args.output) if args.output else _default_output_path()
     _write_summary(output_path, summaries)
 
-    ranked = sorted(summaries, key=lambda summary: summary.best_metric)
+    ranked = sorted(summaries, key=lambda summary: summary.best_val_metric)
     print(json.dumps([asdict(summary) for summary in ranked], indent=2, sort_keys=True))
     print(f"\nSummary written to {output_path}")
 

@@ -56,7 +56,7 @@ def main() -> None:
         yaml.safe_dump(
             {
                 "output_dir": str(result.output_dir),
-                "best_metric": result.best_metric,
+                "best_val_metric": result.best_val_metric,
                 "final_step": result.final_step,
                 "test_loss": result.test_loss,
                 "test_metric": result.test_metric,
