@@ -954,15 +954,18 @@ def _scp1_config_means(df: pd.DataFrame, test_col: str) -> pd.DataFrame:
     missing = [c for c in _SCP1_CONFIG_COLS if c not in df.columns]
     if missing:
         raise KeyError(f"scp1 sweep missing config columns: {missing}")
-    cols = [test_col] + ([_SCP1_VAL_COL] if _SCP1_VAL_COL in df.columns else [])
-    gb = df.groupby(list(_SCP1_CONFIG_COLS), dropna=False)[cols]
-    means = gb.mean().rename(columns={test_col: "test", _SCP1_VAL_COL: "val"})
-    # Seed-std of the test metric, per config. Std over a single seed is NaN,
-    # which matplotlib's errorbar renders as a missing whisker — fine.
-    test_std = gb[test_col].std().rename("test_std")
-    grouped = means.join(test_std)
-    if "val" not in grouped.columns:
-        grouped["val"] = float("nan")
+    has_val = _SCP1_VAL_COL in df.columns
+    gb = df.groupby(list(_SCP1_CONFIG_COLS), dropna=False)
+    # Compute mean+std of test separately from mean-of-val to keep a flat,
+    # string-indexed column layout (avoids pandas MultiIndex gymnastics).
+    test_stats = gb[test_col].agg(test="mean", test_std="std")
+    if has_val:
+        val_mean = gb[_SCP1_VAL_COL].mean().rename("val")
+        grouped = test_stats.join(val_mean)
+    else:
+        grouped = test_stats.assign(val=float("nan"))
+    # Seed-std is NaN for single-seed cells — matplotlib renders that as a
+    # missing whisker, which is the behavior we want.
     return grouped.dropna(subset=["test"])
 
 
@@ -1147,16 +1150,27 @@ def _plot_scp1_histograms(
         ax.hist(test_values, bins=bins, color="#4c72b0", edgecolor="black", linewidth=0.4)
         idx = _select_idx(df[ranking_col], spec.higher_is_better)
         chosen = float("nan") if idx is None else float(df.loc[idx, "test"])
+        mean_val = float(np.nanmean(test_values))
         if not np.isnan(chosen):
-            ax.axvline(chosen, color="crimson", linestyle="--", linewidth=1.2)
+            ax.axvline(
+                chosen, color="crimson", linestyle="--", linewidth=1.2, label="selected"
+            )
+        if not np.isnan(mean_val):
+            ax.axvline(
+                mean_val, color="black", linestyle=":", linewidth=1.2, label="mean"
+            )
         ax.text(
             0.98,
             0.95,
-            f"selected={spec.value_format(chosen)}\nn={len(test_values)}",
+            (
+                f"selected={spec.value_format(chosen)}\n"
+                f"mean={spec.value_format(mean_val)}\n"
+                f"n={len(test_values)}"
+            ),
             transform=ax.transAxes,
             ha="right",
             va="top",
-            fontsize=9,
+            fontsize=8,
         )
         ax.set_title(label.replace("\n", " — "), fontsize=11)
         ax.spines["top"].set_visible(False)
@@ -1170,7 +1184,77 @@ def _plot_scp1_histograms(
     for ax in axes[::ncols]:
         ax.set_ylabel("Count (of 81 configs)")
 
+    # Single shared legend for selected/mean markers.
+    axes[0].legend(loc="upper left", fontsize=8, frameon=False)
+
     fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
+    return fig
+
+
+def _plot_scp1_histogram_overlay(
+    scenarios: dict[str, pd.DataFrame],
+    spec: MetricSpec,
+    title: str,
+    *,
+    select_by: str,
+) -> plt.Figure:
+    """All scenarios overlaid on a single axis for direct distribution comparison.
+
+    Each scenario is drawn as a translucent filled histogram in a distinct
+    color, with solid vertical lines at the selected-config test score and
+    dotted vertical lines at the scenario mean. The shared x-axis makes
+    location/spread differences visible at a glance.
+    """
+    labels = list(scenarios.keys())
+    all_vals = np.concatenate([df["test"].values for df in scenarios.values()])
+    lo, hi = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
+    pad = max((hi - lo) * 0.05, 1e-3)
+    bins = np.linspace(lo - pad, hi + pad, 25)
+
+    # Qualitative palette; tab10 has 10 distinct hues, plenty for 6 scenarios.
+    cmap_obj = plt.get_cmap("tab10")
+    colors = [cmap_obj(i) for i in range(len(labels))]
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    ranking_col = "val" if select_by == "val" else "test"
+    for label, color in zip(labels, colors):
+        df = scenarios[label]
+        test_values = df["test"].values
+        flat_label = label.replace("\n", " ")
+        ax.hist(
+            test_values,
+            bins=bins,
+            color=color,
+            alpha=0.35,
+            edgecolor=color,
+            linewidth=1.0,
+            label=flat_label,
+        )
+        idx = _select_idx(df[ranking_col], spec.higher_is_better)
+        if idx is not None:
+            chosen = float(df.loc[idx, "test"])
+            ax.axvline(chosen, color=color, linestyle="-", linewidth=1.6, alpha=0.9)
+        mean_val = float(np.nanmean(test_values))
+        if not np.isnan(mean_val):
+            ax.axvline(mean_val, color=color, linestyle=":", linewidth=1.4, alpha=0.9)
+
+    ax.set_xlabel(f"Per-config seed-mean {spec.label.lower()}")
+    ax.set_ylabel("Count (of 81 configs)")
+    ax.set_title(title, pad=12)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    # Scenario legend + a separate style legend so the solid/dotted lines are
+    # explained without cluttering each entry.
+    scenario_legend = ax.legend(loc="upper left", fontsize=9, frameon=False)
+    ax.add_artist(scenario_legend)
+    style_handles = [
+        plt.Line2D([], [], color="gray", linestyle="-", linewidth=1.6, label="selected"),
+        plt.Line2D([], [], color="gray", linestyle=":", linewidth=1.4, label="mean"),
+    ]
+    ax.legend(handles=style_handles, loc="upper right", fontsize=9, frameon=False)
+
     fig.tight_layout()
     return fig
 
@@ -1218,6 +1302,19 @@ def _study_scp1_scenarios(sweeps_root: Path, output_dir: Path, *, select_by: str
     hist_fig.savefig(hist_path)
     print(f"  Saved: {hist_path}")
     plt.close(hist_fig)
+
+    overlay_fig = _plot_scp1_histogram_overlay(
+        scenarios,
+        spec,
+        title=(
+            f"SCP1 — Overlaid per-config test-accuracy distributions ({selection_desc})"
+        ),
+        select_by=select_by,
+    )
+    overlay_path = output_dir / f"study_scp1_scenarios_hist_overlay_by_{select_by}.png"
+    overlay_fig.savefig(overlay_path)
+    print(f"  Saved: {overlay_path}")
+    plt.close(overlay_fig)
 
 
 def study_scp1_scenarios_by_test(sweeps_root: Path, output_dir: Path) -> None:
