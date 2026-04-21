@@ -9,6 +9,7 @@ and produces charts. Studies are grouped by dataset in ``STUDIES``:
 - cifar_multihead: num_heads bars across damped/undamped × bare/gated
 - ppg_init:        AG grids (coarse + fine) + undamped baseline (MSE)
 - ppg_multihead:   num_heads bars across bare/proj/gated for PPG damped
+- scp1_scenarios:  damping × heads × output-proj, best-config bar + per-config histogram
 
 Usage
 -----
@@ -905,6 +906,305 @@ def study_ppg_multihead_gated_damped(sweeps_root: Path, output_dir: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# SCP1 scenario comparison: damping × multi-head × output-projection
+# ---------------------------------------------------------------------------
+
+# The four hyperparameters that define a "configuration" in the scp1 sweeps.
+# Each scenario spans an 81-point grid (3 × 3 × 3 × 3) × 5 seeds = 405 runs.
+_SCP1_CONFIG_COLS: tuple[str, ...] = (
+    "model_hidden_dim",
+    f"{_HPARAM_PREFIX}state_dim",
+    f"{_HPARAM_PREFIX}num_blocks",
+    "optimizer_learning_rate",
+)
+
+
+@dataclass(frozen=True)
+class _Scp1Scenario:
+    """Selects a subset of one scp1 sweep that shares (damping, heads, proj)."""
+
+    label: str  # short label for charts, e.g. "damped\nH=2, proj"
+    sweep_name: str
+    num_heads: int
+    use_output_proj: bool
+
+
+# Order here controls bar/histogram panel order.
+_SCP1_SCENARIOS: tuple[_Scp1Scenario, ...] = (
+    _Scp1Scenario("undamped\nH=1", "scp1/undamped/notime-sweep", 1, False),
+    _Scp1Scenario("damped\nH=1", "scp1/damped/notime-sweep", 1, False),
+    _Scp1Scenario("damped\nH=2", "scp1/damped/notime-multiheading-sweep", 2, False),
+    _Scp1Scenario("damped\nH=2, proj", "scp1/damped/notime-multiheading-sweep", 2, True),
+    _Scp1Scenario("damped\nH=4", "scp1/damped/notime-multiheading-sweep", 4, False),
+    _Scp1Scenario("damped\nH=4, proj", "scp1/damped/notime-multiheading-sweep", 4, True),
+)
+
+
+_SCP1_VAL_COL = "best_val_metric"
+
+
+def _scp1_config_means(df: pd.DataFrame, test_col: str) -> pd.DataFrame:
+    """Seed-mean per configuration for both test and val scores.
+
+    Returns a DataFrame with columns ("test", "val"), indexed by config tuple.
+    Rows where the test mean is NaN are dropped. "val" may be NaN for older
+    runs that didn't log best_val_metric — that only disables val-based
+    selection, not test-based aggregation.
+    """
+    missing = [c for c in _SCP1_CONFIG_COLS if c not in df.columns]
+    if missing:
+        raise KeyError(f"scp1 sweep missing config columns: {missing}")
+    cols = [test_col] + ([_SCP1_VAL_COL] if _SCP1_VAL_COL in df.columns else [])
+    grouped = df.groupby(list(_SCP1_CONFIG_COLS), dropna=False)[cols].mean()
+    grouped = grouped.rename(columns={test_col: "test", _SCP1_VAL_COL: "val"})
+    if "val" not in grouped.columns:
+        grouped["val"] = float("nan")
+    return grouped.dropna(subset=["test"])
+
+
+def _select_idx(scores: pd.Series, higher_is_better: bool) -> Any:
+    """Index of the best (or worst, for lower-is-better) score, skipping NaN."""
+    clean = scores.dropna()
+    if clean.empty:
+        return None
+    return clean.idxmax() if higher_is_better else clean.idxmin()
+
+
+def _load_scp1_scenarios(
+    sweeps_root: Path, spec: MetricSpec, *, select_by: str
+) -> dict[str, pd.DataFrame]:
+    """Load per-configuration seed-mean scores for every scp1 scenario.
+
+    Each scenario value is a DataFrame with columns ("test", "val"), one row
+    per configuration. ``select_by`` is used only for the log line here —
+    downstream plot helpers receive it directly.
+    """
+    heads_col = f"{_HPARAM_PREFIX}num_heads"
+    proj_col = f"{_HPARAM_PREFIX}use_head_output_projection"
+    value_col = spec.column
+
+    # Cache per-sweep loads since damped multiheading is reused across 4 scenarios.
+    cache: dict[str, pd.DataFrame] = {}
+    scenarios: dict[str, pd.DataFrame] = {}
+    for sc in _SCP1_SCENARIOS:
+        if sc.sweep_name not in cache:
+            df = _load_sweep(sweeps_root, sc.sweep_name)
+            # Ensure accuracy column exists even when only test_metric was populated.
+            if value_col not in df.columns and "test_metric" in df.columns:
+                df[value_col] = df["test_metric"]
+            cache[sc.sweep_name] = df
+        df = cache[sc.sweep_name]
+        flat_label = sc.label.replace("\n", " ")
+        if df.empty:
+            print(f"  [{flat_label}] sweep empty, skipping")
+            continue
+
+        mask = pd.Series(True, index=df.index)
+        if heads_col in df.columns:
+            mask &= df[heads_col] == sc.num_heads
+        if proj_col in df.columns:
+            mask &= df[proj_col] == sc.use_output_proj
+        sub = df[mask]
+        if sub.empty:
+            print(
+                f"  [{flat_label}] no runs match heads={sc.num_heads}, proj={sc.use_output_proj}"
+            )
+            continue
+
+        config_scores = _scp1_config_means(sub, value_col)
+        scenarios[sc.label] = config_scores
+
+        ranking_col = "val" if select_by == "val" else "test"
+        idx = _select_idx(config_scores[ranking_col], spec.higher_is_better)
+        chosen_test = config_scores.loc[idx, "test"] if idx is not None else float("nan")
+        print(
+            f"  [{flat_label}] runs={len(sub)}  configs={len(config_scores)}  "
+            f"chosen test (by {ranking_col})={spec.value_format(chosen_test)}"
+        )
+    return scenarios
+
+
+def _scp1_selected_test(
+    scenarios: dict[str, pd.DataFrame], select_by: str, higher_is_better: bool
+) -> np.ndarray:
+    """For each scenario, return the test score of the config picked by select_by.
+
+    ``select_by="test"`` picks the argmax (or argmin) config by test score;
+    ``select_by="val"`` picks it by val score and reports that config's test
+    score — the standard "model selection on val" protocol.
+    """
+    ranking_col = "val" if select_by == "val" else "test"
+    out = []
+    for df in scenarios.values():
+        idx = _select_idx(df[ranking_col], higher_is_better)
+        out.append(float("nan") if idx is None else float(df.loc[idx, "test"]))
+    return np.array(out)
+
+
+def _plot_scp1_best_bars(
+    scenarios: dict[str, pd.DataFrame],
+    spec: MetricSpec,
+    title: str,
+    *,
+    select_by: str,
+) -> plt.Figure:
+    """Bar chart of the selected per-config seed-mean test score per scenario."""
+    labels = list(scenarios.keys())
+    best = _scp1_selected_test(scenarios, select_by, spec.higher_is_better)
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    x = np.arange(len(labels))
+    cmap_obj = plt.get_cmap(spec.cmap)
+    vmin = spec.vmin if spec.vmin is not None else float(np.nanmin(best)) - 0.005
+    vmax = spec.vmax if spec.vmax is not None else float(np.nanmax(best)) + 0.005
+    norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    colors = [cmap_obj(norm(v)) for v in best]
+
+    bars = ax.bar(x, best, width=0.75, color=colors, edgecolor="black", linewidth=0.5)
+    pad = max(abs(np.nanmax(best) - np.nanmin(best)) * 0.01, 1e-6)
+    for bar, v in zip(bars, best):
+        if np.isnan(v):
+            continue
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + pad,
+            spec.value_format(v),
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            fontweight="medium",
+        )
+
+    selection_desc = "max val" if select_by == "val" else "max test"
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel(f"{spec.label} of config selected by {selection_desc}")
+    ax.set_title(title, pad=12)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.tight_layout()
+    return fig
+
+
+def _plot_scp1_histograms(
+    scenarios: dict[str, pd.DataFrame],
+    spec: MetricSpec,
+    title: str,
+    *,
+    select_by: str,
+) -> plt.Figure:
+    """Small-multiples histogram of per-config seed-mean test scores.
+
+    The dashed marker shows the test score of the config chosen by
+    ``select_by`` — so for ``select_by="val"`` it is not necessarily at the
+    histogram's extremum.
+    """
+    labels = list(scenarios.keys())
+    n = len(labels)
+    ncols = 3 if n > 3 else n
+    nrows = int(np.ceil(n / ncols))
+
+    all_vals = np.concatenate([df["test"].values for df in scenarios.values()])
+    lo, hi = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
+    pad = max((hi - lo) * 0.05, 1e-3)
+    bins = np.linspace(lo - pad, hi + pad, 21)
+
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(4.2 * ncols, 3.0 * nrows), sharex=True, sharey=True
+    )
+    axes = np.atleast_1d(axes).flatten()
+
+    ranking_col = "val" if select_by == "val" else "test"
+    for ax, label in zip(axes, labels):
+        df = scenarios[label]
+        test_values = df["test"].values
+        ax.hist(test_values, bins=bins, color="#4c72b0", edgecolor="black", linewidth=0.4)
+        idx = _select_idx(df[ranking_col], spec.higher_is_better)
+        chosen = float("nan") if idx is None else float(df.loc[idx, "test"])
+        if not np.isnan(chosen):
+            ax.axvline(chosen, color="crimson", linestyle="--", linewidth=1.2)
+        ax.text(
+            0.98,
+            0.95,
+            f"selected={spec.value_format(chosen)}\nn={len(test_values)}",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=9,
+        )
+        ax.set_title(label.replace("\n", " — "), fontsize=11)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    for ax in axes[n:]:
+        ax.set_visible(False)
+
+    for ax in axes[-ncols:]:
+        ax.set_xlabel(f"Per-config seed-mean {spec.label.lower()}")
+    for ax in axes[::ncols]:
+        ax.set_ylabel("Count (of 81 configs)")
+
+    fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
+    return fig
+
+
+def _study_scp1_scenarios(sweeps_root: Path, output_dir: Path, *, select_by: str) -> None:
+    """Back-end for the scp1 scenario study, parametrized by selection rule.
+
+    ``select_by`` must be ``"test"`` (pick each scenario's config by the
+    highest seed-mean test score — the optimistic view) or ``"val"`` (pick by
+    the highest seed-mean best_val_metric and report that config's test score
+    — the honest, model-selection-on-val view).
+    """
+    if select_by not in ("test", "val"):
+        raise ValueError(f"select_by must be 'test' or 'val', got {select_by!r}")
+
+    spec = ACCURACY_SPEC
+    print("\n" + "=" * 60)
+    print(f"STUDY: SCP1 Scenario Comparison (select_by={select_by})  [{spec.label}]")
+    print("=" * 60)
+
+    scenarios = _load_scp1_scenarios(sweeps_root, spec, select_by=select_by)
+    if not scenarios:
+        print("  No scenarios loaded, skipping")
+        return
+
+    selection_desc = "val-selected" if select_by == "val" else "test-selected"
+    bar_fig = _plot_scp1_best_bars(
+        scenarios,
+        spec,
+        title=f"SCP1 — {selection_desc.capitalize()} test accuracy by scenario",
+        select_by=select_by,
+    )
+    bar_path = output_dir / f"study_scp1_scenarios_best_by_{select_by}.png"
+    bar_fig.savefig(bar_path)
+    print(f"  Saved: {bar_path}")
+    plt.close(bar_fig)
+
+    hist_fig = _plot_scp1_histograms(
+        scenarios,
+        spec,
+        title=(f"SCP1 — Distribution of per-config seed-mean test accuracy ({selection_desc})"),
+        select_by=select_by,
+    )
+    hist_path = output_dir / f"study_scp1_scenarios_hist_by_{select_by}.png"
+    hist_fig.savefig(hist_path)
+    print(f"  Saved: {hist_path}")
+    plt.close(hist_fig)
+
+
+def study_scp1_scenarios_by_test(sweeps_root: Path, output_dir: Path) -> None:
+    """SCP1 scenarios — select best config per scenario by test accuracy."""
+    _study_scp1_scenarios(sweeps_root, output_dir, select_by="test")
+
+
+def study_scp1_scenarios_by_val(sweeps_root: Path, output_dir: Path) -> None:
+    """SCP1 scenarios — select best config per scenario by best_val_metric."""
+    _study_scp1_scenarios(sweeps_root, output_dir, select_by="val")
+
+
+# ---------------------------------------------------------------------------
 # Registry & CLI
 # ---------------------------------------------------------------------------
 
@@ -923,6 +1223,7 @@ STUDIES: dict[str, list[Any]] = {
         study_ppg_multihead_proj_damped,
         study_ppg_multihead_gated_damped,
     ],
+    "scp1_scenarios": [study_scp1_scenarios_by_test, study_scp1_scenarios_by_val],
 }
 
 
