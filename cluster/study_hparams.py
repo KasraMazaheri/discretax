@@ -955,8 +955,12 @@ def _scp1_config_means(df: pd.DataFrame, test_col: str) -> pd.DataFrame:
     if missing:
         raise KeyError(f"scp1 sweep missing config columns: {missing}")
     cols = [test_col] + ([_SCP1_VAL_COL] if _SCP1_VAL_COL in df.columns else [])
-    grouped = df.groupby(list(_SCP1_CONFIG_COLS), dropna=False)[cols].mean()
-    grouped = grouped.rename(columns={test_col: "test", _SCP1_VAL_COL: "val"})
+    gb = df.groupby(list(_SCP1_CONFIG_COLS), dropna=False)[cols]
+    means = gb.mean().rename(columns={test_col: "test", _SCP1_VAL_COL: "val"})
+    # Seed-std of the test metric, per config. Std over a single seed is NaN,
+    # which matplotlib's errorbar renders as a missing whisker — fine.
+    test_std = gb[test_col].std().rename("test_std")
+    grouped = means.join(test_std)
     if "val" not in grouped.columns:
         grouped["val"] = float("nan")
     return grouped.dropna(subset=["test"])
@@ -1026,19 +1030,25 @@ def _load_scp1_scenarios(
 
 def _scp1_selected_test(
     scenarios: dict[str, pd.DataFrame], select_by: str, higher_is_better: bool
-) -> np.ndarray:
-    """For each scenario, return the test score of the config picked by select_by.
+) -> tuple[np.ndarray, np.ndarray]:
+    """For each scenario, return (test_mean, test_std) for the selected config.
 
     ``select_by="test"`` picks the argmax (or argmin) config by test score;
     ``select_by="val"`` picks it by val score and reports that config's test
-    score — the standard "model selection on val" protocol.
+    score — the standard "model selection on val" protocol. The std is the
+    5-seed std dev of the test metric for the selected config.
     """
     ranking_col = "val" if select_by == "val" else "test"
-    out = []
+    means, stds = [], []
     for df in scenarios.values():
         idx = _select_idx(df[ranking_col], higher_is_better)
-        out.append(float("nan") if idx is None else float(df.loc[idx, "test"]))
-    return np.array(out)
+        if idx is None:
+            means.append(float("nan"))
+            stds.append(float("nan"))
+        else:
+            means.append(float(df.loc[idx, "test"]))
+            stds.append(float(df.loc[idx, "test_std"]))
+    return np.array(means), np.array(stds)
 
 
 def _plot_scp1_best_bars(
@@ -1050,7 +1060,7 @@ def _plot_scp1_best_bars(
 ) -> plt.Figure:
     """Bar chart of the selected per-config seed-mean test score per scenario."""
     labels = list(scenarios.keys())
-    best = _scp1_selected_test(scenarios, select_by, spec.higher_is_better)
+    best, best_std = _scp1_selected_test(scenarios, select_by, spec.higher_is_better)
 
     fig, ax = plt.subplots(figsize=(9, 5))
     x = np.arange(len(labels))
@@ -1060,15 +1070,31 @@ def _plot_scp1_best_bars(
     norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
     colors = [cmap_obj(norm(v)) for v in best]
 
-    bars = ax.bar(x, best, width=0.75, color=colors, edgecolor="black", linewidth=0.5)
+    # yerr must be finite for matplotlib; substitute 0 for single-seed NaNs.
+    yerr = np.where(np.isnan(best_std), 0.0, best_std)
+    bars = ax.bar(
+        x,
+        best,
+        width=0.75,
+        color=colors,
+        edgecolor="black",
+        linewidth=0.5,
+        yerr=yerr,
+        capsize=4,
+        error_kw={"linewidth": 1.2, "ecolor": "black"},
+    )
     pad = max(abs(np.nanmax(best) - np.nanmin(best)) * 0.01, 1e-6)
-    for bar, v in zip(bars, best):
+    for bar, v, s in zip(bars, best, best_std):
         if np.isnan(v):
             continue
+        whisker_top = bar.get_height() + (s if not np.isnan(s) else 0.0)
+        label = spec.value_format(v)
+        if not np.isnan(s):
+            label += f"\n{spec.std_format(s)}"
         ax.text(
             bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + pad,
-            spec.value_format(v),
+            whisker_top + pad,
+            label,
             ha="center",
             va="bottom",
             fontsize=9,
