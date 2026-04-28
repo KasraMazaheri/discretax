@@ -302,7 +302,7 @@ class TrainerConfig:
     """Runtime training configuration."""
 
     seed: int = 0
-    num_epochs: int = 1
+    num_epochs: int | None = None
     max_steps: int | None = None
     log_every_steps: int = 10
     eval_every_steps: int = 100
@@ -312,7 +312,9 @@ class TrainerConfig:
 
     def __post_init__(self) -> None:
         """Validate trainer settings."""
-        if self.num_epochs <= 0:
+        if self.num_epochs is None and self.max_steps is None:
+            raise ValueError("at least one of trainer.num_epochs or trainer.max_steps must be set")
+        if self.num_epochs is not None and self.num_epochs <= 0:
             raise ValueError("trainer.num_epochs must be positive")
         if self.max_steps is not None and self.max_steps <= 0:
             raise ValueError("trainer.max_steps must be positive when provided")
@@ -415,8 +417,8 @@ class ExperimentConfig:
         paths = PathsConfig(**data.get("paths", {}))
         loader = DataloaderConfig(**data.get("loader", {}))
         dataset_data = dict(data["dataset"])
-        dataset_data.pop("seed", None)
-        dataset = DatasetConfig(seed=seed, **dataset_data)
+        dataset_seed = int(dataset_data.pop("seed", seed))
+        dataset = DatasetConfig(seed=dataset_seed, **dataset_data)
 
         model_data = data["model"]
         _expect_keys(
@@ -438,8 +440,8 @@ class ExperimentConfig:
         regularization = RegularizationConfig(**data.get("regularization", {}))
         ema = EMAConfig(**data.get("ema", {}))
         trainer_data = dict(data.get("trainer", {}))
-        trainer_data.pop("seed", None)
-        trainer = TrainerConfig(seed=seed, **trainer_data)
+        trainer_seed = int(trainer_data.pop("seed", seed))
+        trainer = TrainerConfig(seed=trainer_seed, **trainer_data)
         precision = PrecisionConfig(**data.get("precision", {}))
         checkpoint = CheckpointConfig(**data.get("checkpoint", {}))
         wandb = WandbConfig(**data.get("wandb", {}))

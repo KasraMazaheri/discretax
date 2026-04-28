@@ -350,6 +350,8 @@ def _resolve_total_steps(
     experiment_config: ExperimentConfig,
 ) -> int:
     """Resolve the total number of optimizer steps for a run."""
+    if experiment_config.trainer.num_epochs is None:
+        return experiment_config.trainer.max_steps  # type: ignore[return-value]
     epoch_steps = experiment_config.trainer.num_epochs * count_batches(
         dataset_bundle.train,
         experiment_config.loader.batch_size,
@@ -879,6 +881,7 @@ def run_experiment(
     model = build_model(experiment_config, dataset_bundle, model_key)
     state = eqx.nn.State(model)
 
+    # Takes the min of steps(num_epochs) and max_steps
     total_steps = _resolve_total_steps(dataset_bundle, experiment_config)
 
     optimizer, learning_rate_schedule = _build_optimizer(
@@ -945,7 +948,14 @@ def run_experiment(
                 eval_step=eval_step,
             )
 
-        for epoch in range(runtime_state.start_epoch, experiment_config.trainer.num_epochs):
+        steps_per_epoch = count_batches(
+            dataset_bundle.train,
+            experiment_config.loader.batch_size,
+            drop_last=experiment_config.loader.drop_last_train,
+        )
+        num_epochs = -(-total_steps // steps_per_epoch)  # ceiling division
+
+        for epoch in range(runtime_state.start_epoch, num_epochs):
             epoch_seed = experiment_config.trainer.seed + epoch
             epoch_batches = list(
                 batch_iterator(

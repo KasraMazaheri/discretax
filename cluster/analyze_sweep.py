@@ -199,8 +199,8 @@ def _config_columns(df: pd.DataFrame) -> list[str]:
     }
     # Prefixes that are infrastructure/metadata, not hyperparameters
     excluded_prefixes = ("paths_", "wandb_", "name")
-    # Suffixes / exact names that identify seed columns
-    excluded_seed = ("trainer_seed",)
+    # Seed columns are nuisance variables — exclude from grouping
+    excluded_seed = {"seed", "trainer_seed", "dataset_seed"}
 
     return [
         col

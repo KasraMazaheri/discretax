@@ -12,7 +12,7 @@ Example:
         --config configs/experiments/cifar10_linoss_example.yaml \\
         --sweep "optimizer.learning_rate=0.0001,0.001" \\
         --sweep "model.backbone.kwargs.state_dim=64,128,256" \\
-        --fixed "trainer.seed=42" \\
+        --sweep "seed=0,1,2" \\
         --name cifar10-lr-statedim
 
     condor_submit cluster/sweep.sub.generated
@@ -52,7 +52,7 @@ def _parse_arguments() -> argparse.Namespace:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="Fixed override applied to every job (e.g. 'trainer.seed=42').",
+        help="Fixed override applied to every job (e.g. 'trainer.max_steps=50000').",
     )
     parser.add_argument(
         "--name",
