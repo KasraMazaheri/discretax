@@ -1,10 +1,8 @@
 dataset:
   kind: uea
-  name: EigenWorms
+  name: SelfRegulationSCP2
   root: processed/UEA
   download: false
-  validation_split: 0.15
-  sequence_layout: time_major
   normalize: false
   seed: 0
   params:

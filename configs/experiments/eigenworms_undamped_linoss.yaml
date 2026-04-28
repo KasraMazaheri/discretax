@@ -9,6 +9,11 @@ tags:
   - linoss
   - uea
   - eigenworms
+model:
+  backbone:
+    kwargs:
+      discretization: IM
+      damping: false
 wandb:
   enabled: true
   mode: online
