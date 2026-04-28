@@ -91,17 +91,49 @@ def create_tracker(experiment_config: ExperimentConfig, output_dir: Path) -> Tra
     if not experiment_config.wandb.enabled:
         return NullTracker()
 
+    import time
+
     import wandb
 
-    run = wandb.init(
+    init_kwargs = dict(
         project=build_project_name(experiment_config),
         entity=experiment_config.wandb.entity,
         group=experiment_config.wandb.group,
         job_type=experiment_config.wandb.job_type,
-        mode=experiment_config.wandb.mode,
         name=build_run_name(experiment_config),
         dir=str(output_dir),
         tags=build_tags(experiment_config),
         config=flatten_config(experiment_config),
+        settings=wandb.Settings(init_timeout=120),
     )
-    return WandbTracker(run=run)
+
+    # If mode is explicitly set (e.g. "offline" or "disabled"), respect it directly.
+    if experiment_config.wandb.mode:
+        run = wandb.init(mode=experiment_config.wandb.mode, **init_kwargs)
+        return WandbTracker(run=run)
+
+    # Otherwise attempt online with retries, then fall back to offline.
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            run = wandb.init(mode="online", **init_kwargs)
+            return WandbTracker(run=run)
+        except wandb.errors.CommError as e:
+            if attempt < max_attempts - 1:
+                wait = 30 * (attempt + 1)
+                print(
+                    f"[wandb] Init failed (attempt {attempt + 1}/{max_attempts}), "
+                    f"retrying in {wait}s: {e}"
+                )
+                time.sleep(wait)
+            else:
+                print(
+                    f"[wandb] Online init failed after {max_attempts} attempts, "
+                    "falling back to offline mode. Sync later with: "
+                    f"wandb sync {output_dir}/wandb/offline-run-*"
+                )
+                run = wandb.init(mode="offline", **init_kwargs)
+                return WandbTracker(run=run)
+
+    raise RuntimeError("unreachable")  # satisfy type checkers
+

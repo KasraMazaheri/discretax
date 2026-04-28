@@ -18,7 +18,7 @@ model:
       discretization: IMEX
       initialization: AG
       damping: true
-      stability: stable
+      stability: oscillatory
       A_max: 1.0
       G_max: 0.2
   head:

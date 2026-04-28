@@ -13,7 +13,7 @@ environment = "HYDRA_FULL_ERROR=1"
 request_memory = 64000
 request_cpus   = 4
 request_gpus   = 1
-# requirements = TARGET.CUDAGlobalMemoryMb > 60000
+requirements = TARGET.CUDAGlobalMemoryMb > 32000
 
 log    = sweeps/$(SWEEP_NAME)/logs/job_$(ClusterId)_$(JOB_ID).log
 output = sweeps/$(SWEEP_NAME)/logs/job_$(ClusterId)_$(JOB_ID).out
