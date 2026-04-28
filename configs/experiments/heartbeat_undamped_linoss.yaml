@@ -3,7 +3,7 @@ defaults:
   - ../datasets/heartbeat
   - ../models/linoss
 
-name: linoss-uea-heartbeat
+name: linoss-uea-heartbeat-undamped
 description: Base LinOSS experiment on the UEA Heartbeat classification dataset.
 tags:
   - linoss
@@ -25,4 +25,3 @@ wandb:
     - heartbeat
     - classification
     - online
-

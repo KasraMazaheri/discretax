@@ -3,7 +3,7 @@ defaults:
   - ../datasets/motor
   - ../models/linoss
 
-name: linoss-uea-motor
+name: linoss-uea-motor-undamped
 description: Base LinOSS experiment on the UEA MotorImagery classification dataset.
 tags:
   - linoss
@@ -25,4 +25,3 @@ wandb:
     - motor
     - classification
     - online
-

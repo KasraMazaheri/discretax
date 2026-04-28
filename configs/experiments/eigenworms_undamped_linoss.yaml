@@ -3,7 +3,7 @@ defaults:
   - ../datasets/eigenworms
   - ../models/linoss
 
-name: linoss-uea-eigenworms
+name: linoss-uea-eigenworms-undamped
 description: Base LinOSS experiment on the UEA EigenWorms classification dataset.
 tags:
   - linoss

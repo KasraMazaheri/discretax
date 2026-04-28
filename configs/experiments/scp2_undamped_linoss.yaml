@@ -3,7 +3,7 @@ defaults:
   - ../datasets/scp2
   - ../models/linoss
 
-name: linoss-uea-scp2
+name: linoss-uea-scp2-undamped
 description: Base LinOSS experiment on the UEA SelfRegulationSCP2 classification dataset.
 tags:
   - linoss
@@ -25,4 +25,3 @@ wandb:
     - scp2
     - classification
     - online
-

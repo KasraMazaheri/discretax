@@ -4,6 +4,5 @@ dataset:
   root: processed/UEA
   download: false
   normalize: false
-  seed: 0
   params:
     include_time: false

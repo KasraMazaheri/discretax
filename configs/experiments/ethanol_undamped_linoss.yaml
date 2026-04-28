@@ -3,7 +3,7 @@ defaults:
   - ../datasets/ethanol
   - ../models/linoss
 
-name: linoss-uea-ethanol
+name: linoss-uea-ethanol-undamped
 description: Base LinOSS experiment on the UEA EthanolConcentration classification dataset.
 tags:
   - linoss
@@ -25,4 +25,3 @@ wandb:
     - ethanol
     - classification
     - online
-
