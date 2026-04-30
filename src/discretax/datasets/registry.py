@@ -383,6 +383,40 @@ def _build_ppg_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig)
     )
 
 
+def _build_weather_dataset(
+    paths_config: PathsConfig, dataset_config: DatasetConfig
+) -> DatasetBundle:
+    """Build the Weather long-horizon forecasting dataset.
+
+    Inputs and targets are both (N, 1440, 12). The first 720 timesteps of the
+    input are real context and the last 720 are a -1 sentinel; the targets
+    invert this. `metadata["loss_window"] = 720` tells the trainer to compute
+    loss/metrics only over the last 720 timesteps.
+    """
+    dataset_root = resolve_dataset_path(paths_config, dataset_config)
+
+    train_inputs = _load_pickle(dataset_root / "X_train.pkl").astype(np.float32)
+    validation_inputs = _load_pickle(dataset_root / "X_val.pkl").astype(np.float32)
+    test_inputs = _load_pickle(dataset_root / "X_test.pkl").astype(np.float32)
+    train_targets = _load_pickle(dataset_root / "y_train.pkl").astype(np.float32)
+    validation_targets = _load_pickle(dataset_root / "y_val.pkl").astype(np.float32)
+    test_targets = _load_pickle(dataset_root / "y_test.pkl").astype(np.float32)
+
+    horizon = int(dataset_config.params.get("loss_window", 720))
+
+    return DatasetBundle(
+        name=dataset_config.resolved_name,
+        task="regression",
+        train=DatasetSplit(train_inputs, train_targets),
+        validation=DatasetSplit(validation_inputs, validation_targets),
+        test=DatasetSplit(test_inputs, test_targets),
+        input_dim=int(train_inputs.shape[-1]),
+        output_dim=int(train_targets.shape[-1]),
+        sequence_length=int(train_inputs.shape[1]),
+        metadata={"loss_window": horizon},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -398,4 +432,6 @@ def build_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig) -> D
         return _build_uea_dataset(paths_config, dataset_config)
     if dataset_config.kind == "ppg":
         return _build_ppg_dataset(paths_config, dataset_config)
+    if dataset_config.kind == "weather":
+        return _build_weather_dataset(paths_config, dataset_config)
     raise ValueError(f"Unsupported dataset kind: {dataset_config.kind}")

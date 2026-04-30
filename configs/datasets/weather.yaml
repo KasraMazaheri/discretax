@@ -1,0 +1,10 @@
+dataset:
+  kind: weather
+  name: weather
+  root: processed/Weather
+  download: false
+  sequence_layout: time_major
+  normalize: false
+  params:
+    loss_window: 720
+    regression_loss: mae

@@ -118,10 +118,20 @@ def _classification_metrics(
 def _regression_metrics(
     predictions: jax.Array,
     targets: jax.Array,
+    *,
+    loss_window: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
-    """Compute regression MSE loss and MAE."""
+    """Compute regression MSE and MAE.
+
+    When `loss_window` is set, both metrics are restricted to the last
+    `loss_window` steps along the time axis (axis -2). This is used by
+    forecasting datasets where leading timesteps are sentinel/context.
+    """
     predictions = predictions.astype(jnp.float32)
     targets = targets.astype(jnp.float32)
+    if loss_window is not None:
+        predictions = predictions[..., -loss_window:, :]
+        targets = targets[..., -loss_window:, :]
     mse = jnp.mean((predictions - targets) ** 2)
     mae = jnp.mean(jnp.abs(predictions - targets))
     return mse, mae
@@ -139,12 +149,33 @@ def _classification_loss(
     return loss, {"accuracy": accuracy}
 
 
-def _regression_loss(
-    predictions: jax.Array, targets: jax.Array
-) -> tuple[jax.Array, dict[str, jax.Array]]:
-    """MSE loss with MAE reported as an extra metric."""
-    mse, mae = _regression_metrics(predictions, targets)
-    return mse, {"mse": mse, "mae": mae}
+def _build_compute_loss(experiment_config: ExperimentConfig, dataset_bundle: DatasetBundle):
+    """Select and configure the per-task loss/metric closure."""
+    if dataset_bundle.task != "regression":
+        return _classification_loss
+    loss_kind = experiment_config.dataset.params.get("regression_loss", "mse")
+    loss_window = dataset_bundle.metadata.get("loss_window")
+    return _make_regression_loss(loss_kind=loss_kind, loss_window=loss_window)
+
+
+def _make_regression_loss(loss_kind: str = "mse", loss_window: int | None = None):
+    """Build a regression loss closure.
+
+    `loss_kind` selects which metric is minimized ("mse" or "mae"). Both are
+    always reported. `loss_window`, if set, restricts loss/metrics to the
+    final `loss_window` timesteps (forecasting datasets).
+    """
+    if loss_kind not in ("mse", "mae"):
+        raise ValueError(f"Unsupported regression loss: {loss_kind!r}")
+
+    def compute_loss(
+        predictions: jax.Array, targets: jax.Array
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        mse, mae = _regression_metrics(predictions, targets, loss_window=loss_window)
+        loss = mse if loss_kind == "mse" else mae
+        return loss, {"mse": mse, "mae": mae}
+
+    return compute_loss
 
 
 def _safe_throughput(count: int, duration_seconds: float) -> float:
@@ -926,7 +957,7 @@ def run_experiment(
     write_run_metadata(output_dir, run_metadata)
 
     is_regression = dataset_bundle.task == "regression"
-    compute_loss = _regression_loss if is_regression else _classification_loss
+    compute_loss = _build_compute_loss(experiment_config, dataset_bundle)
     train_step = _make_train_step(optimizer, compute_loss)
     eval_step = _make_eval_step(compute_loss)
     _log_static_summary(
