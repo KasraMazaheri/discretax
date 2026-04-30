@@ -239,6 +239,7 @@ class OptimizerConfig:
 
     name: str = "adamw"
     learning_rate: float = 3e-4
+    eps: float = 1e-8
     weight_decay: float = 0.0
     weight_decay_mask: str = "all"
     grad_clip_norm: float | None = None
@@ -251,6 +252,8 @@ class OptimizerConfig:
             raise ValueError(f"optimizer.name must be one of {sorted(supported)}")
         if self.learning_rate <= 0:
             raise ValueError("optimizer.learning_rate must be positive")
+        if self.eps <= 0:
+            raise ValueError("optimizer.eps must be positive")
         supported_masks = {"all", "exclude_1d_params"}
         if self.weight_decay_mask not in supported_masks:
             raise ValueError(

@@ -203,11 +203,14 @@ def _build_optimizer(
         transforms.append(optax.clip_by_global_norm(optimizer_config.grad_clip_norm))
 
     if optimizer_config.name == "adam":
-        transforms.append(optax.adam(learning_rate=learning_rate_schedule))
+        transforms.append(
+            optax.adam(learning_rate=learning_rate_schedule, eps=optimizer_config.eps)
+        )
     elif optimizer_config.name == "adamw":
         transforms.append(
             optax.adamw(
                 learning_rate=learning_rate_schedule,
+                eps=optimizer_config.eps,
                 weight_decay=optimizer_config.weight_decay,
                 mask=_weight_decay_mask(model, optimizer_config),
             )
