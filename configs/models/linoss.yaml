@@ -18,11 +18,11 @@ model:
       discretization: IMEX
       initialization: AG
       damping: true
-      stability: oscillatory
+      stability: stable
       A_max: 1.0
-      G_max: 0.2
+      G_max: 0.25
       projection_eps: 0.001
-      input_normalization: true
+      input_normalization: false
   head:
     target: ClassificationHead
     kwargs:

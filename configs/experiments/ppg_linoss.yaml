@@ -9,41 +9,17 @@ description: Base LinOSS experiment on the PPG-DaLiA regression dataset.
 tags:
   - linoss
   - ppg
-paths:
-  data_root: data
-  output_root: outputs
 loader:
   batch_size: 4
   eval_batch_size: 4
-optimizer:
-  name: adam
-  learning_rate: 0.0001
-  weight_decay: 0.0
-  schedule:
-    name: constant
-ema:
-  enabled: false
 model:
-  backbone:
-    kwargs:
-      A_max: 1.0
-      G_max: 0.25
   head:
     target: RegressionHead
     kwargs:
       reduce: false
       output_step: 128
-checkpoint:
-  monitor: val_loss
-  mode: min
 trainer:
   num_epochs: 100
-  max_steps: 100000
-  log_every_steps: 100
-  eval_every_steps: 1000
-  checkpoint_every_steps: 10000
-precision:
-  mode: float32
 wandb:
   enabled: true
   mode: online

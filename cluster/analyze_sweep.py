@@ -90,24 +90,40 @@ def _load_single_job(
         print(f"Warning: no run directory found in {job_dir}, skipping")
         return None
 
+    summary_file = run_dir / "summary.json"
     metadata_file = run_dir / "run_metadata.json"
-    if not metadata_file.exists():
-        print(f"Warning: no run_metadata.json in {run_dir}, skipping")
-        return None
-    with metadata_file.open() as f:
-        run_metadata = json.load(f)
+
+    summary: dict[str, Any] = {}
+    if summary_file.exists():
+        with summary_file.open() as f:
+            summary = json.load(f)
+
+    # Trust summary.json over run_metadata.json: the trainer writes summary
+    # AFTER finalizing metadata, so any run with a finite test metric is done
+    # even if run_metadata.json wasn't updated (crash on shutdown, NFS, etc.).
+    def _is_finite(v: Any) -> bool:
+        return v is not None and pd.notna(v) and v not in (float("inf"), float("-inf"))
+
+    has_test_metric = any(
+        _is_finite(summary.get(k))
+        for k in ("test_loss", "test_mse", "test_mae", "test_accuracy", "test_metric")
+    )
+
+    if metadata_file.exists():
+        with metadata_file.open() as f:
+            run_metadata = json.load(f)
+    else:
+        run_metadata = {}
 
     status = run_metadata.get("status", "unknown")
-    if status != "completed":
+    if status != "completed" and not has_test_metric:
         print(f"  job-{job_id}: status={status}, skipping")
         return None
-
-    summary_file = run_dir / "summary.json"
+    if status != "completed" and has_test_metric:
+        print(f"  job-{job_id}: status={status} but summary.json has test metrics — accepting")
     if not summary_file.exists():
         print(f"Warning: no summary.json in {run_dir}, skipping")
         return None
-    with summary_file.open() as f:
-        summary = json.load(f)
 
     config_file = run_dir / "config.yaml"
     flat_config: dict[str, Any] = {}
@@ -214,7 +230,7 @@ def _config_columns(df: pd.DataFrame) -> list[str]:
 
 def _varying_columns(df: pd.DataFrame, config_cols: list[str]) -> list[str]:
     """Return only config columns that differ across jobs."""
-    return [col for col in config_cols if col in df.columns and df[col].nunique() > 1]
+    return [col for col in config_cols if col in df.columns and df[col].nunique(dropna=False) > 1]
 
 
 def group_by_config(df: pd.DataFrame) -> pd.DataFrame:

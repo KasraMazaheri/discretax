@@ -3,9 +3,7 @@ dataset:
   name: ppg
   root: processed/PPG/ppg
   download: false
-  validation_split: 0.0
   sequence_layout: time_major
   normalize: false
-  seed: 0
   params:
     include_time: false
