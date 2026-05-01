@@ -66,7 +66,7 @@ ACCURACY_SPEC = MetricSpec(
 )
 
 MSE_SPEC = MetricSpec(
-    column="test_metric",
+    column="test_mse",
     label="Test MSE",
     higher_is_better=False,
     cmap="RdYlGn_r",
@@ -74,6 +74,17 @@ MSE_SPEC = MetricSpec(
     std_format=lambda s: f"±{s:.4f}",
     vmin=0.05,
     vmax=0.15,
+)
+
+MAE_SPEC = MetricSpec(
+    column="test_mae",
+    label="Test MAE",
+    higher_is_better=False,
+    cmap="RdYlGn_r",
+    value_format=lambda v: f"{v:.4f}",
+    std_format=lambda s: f"±{s:.4f}",
+    vmin=0.1,
+    vmax=1.0,
 )
 
 
@@ -101,6 +112,10 @@ RESULT_COLS: frozenset[str] = frozenset({
     "job_dir",
     "score",
     "test_metric",
+    "test_loss",
+    "test_mse",
+    "test_mae",
+    "test_accuracy",
     "best_val_metric",
     "final_step",
     "duration_seconds",
@@ -142,7 +157,9 @@ def _best_agg(spec: MetricSpec) -> str:
 
 def _compute_nuisance(df: pd.DataFrame, study_axes: set[str]) -> list[str]:
     """Config columns that vary but aren't study axes, seeds, or result columns."""
-    seed_cols = {c for c in df.columns if c.endswith("_seed") or c == "trainer_seed"}
+    seed_cols = {
+        c for c in df.columns if c.endswith("_seed") or c == "trainer_seed" or c == "seed"
+    }
     excluded_prefixes = ("paths_", "wandb_", "name")
     return [
         c
@@ -211,11 +228,11 @@ def _bar_metric(
     return stage2[[category_col, "value", "std", "count"]]
 
 
-def _count_grid(df: pd.DataFrame, row_col: str, col_col: str) -> pd.DataFrame:
-    """Count runs per cell."""
-    grouped = df.groupby([row_col, col_col])["test_metric"].count().reset_index()
+def _count_grid(df: pd.DataFrame, row_col: str, col_col: str, value_col: str) -> pd.DataFrame:
+    """Count non-null `value_col` runs per cell."""
+    grouped = df.groupby([row_col, col_col])[value_col].count().reset_index()
     return (
-        grouped.pivot(index=row_col, columns=col_col, values="test_metric")
+        grouped.pivot(index=row_col, columns=col_col, values=value_col)
         .sort_index()
         .reindex(sorted(grouped[col_col].unique()), axis=1)
     )
@@ -508,7 +525,7 @@ def _study_metric_grid(
     best_agg = _best_agg(spec)
     mean_pivot, std_pivot = _pivot_metric_grid(df, row_col, col_col, nuisance, spec, "mean")
     best_pivot, _ = _pivot_metric_grid(df, row_col, col_col, nuisance, spec, best_agg)
-    count_pivot = _count_grid(df, row_col, col_col)
+    count_pivot = _count_grid(df, row_col, col_col, spec.column)
 
     print(f"\n  Grid shape: {mean_pivot.shape[0]} × {mean_pivot.shape[1]}")
     print(f"  Runs per cell: {count_pivot.min().min():.0f}–{count_pivot.max().max():.0f}")
@@ -607,7 +624,8 @@ class DatasetConfig:
 # Adding a new dataset: drop a DatasetConfig in here. file_tag is the dict key.
 DATASETS: dict[str, DatasetConfig] = {
     "cifar":      DatasetConfig("Damped LinOSS",            ACCURACY_SPEC, "cifar10-linoss-damped-sweep-ag", "cifar10-linoss-sweep"),
-    "ppg":        DatasetConfig("PPG Damped LinOSS",        MSE_SPEC,      "ppg/damped/init-fine",           "ppg/undamped/oscillatory-init-sweep"),
+    "ppg":        DatasetConfig("PPG Damped LinOSS",        MSE_SPEC,      "ppg-init",                       "ppg/undamped/oscillatory-init-sweep"),
+    "weather":    DatasetConfig("Weather Damped LinOSS",    MAE_SPEC,      "weather-init",                   "ppg/undamped/oscillatory-init-sweep"),
     "scp1":       DatasetConfig("SCP1 Damped LinOSS",       ACCURACY_SPEC, "scp1-init-sweep",                "scp1-undamped-init"),
     "ethanol":    DatasetConfig("Ethanol Damped LinOSS",    ACCURACY_SPEC, "ethanol-init-sweep",             "ethanol-undamped-init"),
     "heartbeat":  DatasetConfig("Heartbeat Damped LinOSS",  ACCURACY_SPEC, "heartbeat-init-sweep",           "heartbeat/undamped/init"),
@@ -1282,4 +1300,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 

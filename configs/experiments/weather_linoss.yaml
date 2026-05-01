@@ -13,13 +13,17 @@ loader:
   batch_size: 4
   eval_batch_size: 4
 model:
+  backbone:
+    kwargs:
+      A_max: 4.0
+      G_max: 3.0
   head:
     target: RegressionHead
     kwargs:
       reduce: false
       output_step: 1
 trainer:
-  num_epochs: 100
+  num_epochs: 5
 wandb:
   enabled: true
   mode: online

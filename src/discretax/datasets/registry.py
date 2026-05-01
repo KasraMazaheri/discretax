@@ -402,6 +402,11 @@ def _build_weather_dataset(
     validation_targets = _load_pickle(dataset_root / "y_val.pkl").astype(np.float32)
     test_targets = _load_pickle(dataset_root / "y_test.pkl").astype(np.float32)
 
+    if dataset_config.params.get("include_time", False):
+        train_inputs = _add_time_channel(train_inputs)
+        validation_inputs = _add_time_channel(validation_inputs)
+        test_inputs = _add_time_channel(test_inputs)
+
     horizon = int(dataset_config.params.get("loss_window", 720))
 
     return DatasetBundle(
