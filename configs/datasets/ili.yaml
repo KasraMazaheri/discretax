@@ -1,0 +1,8 @@
+defaults:
+  - ./ltsf_base
+
+dataset:
+  name: ILI
+  params:
+    seq_len: 36
+    pred_len: 24

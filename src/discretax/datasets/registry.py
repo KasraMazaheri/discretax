@@ -383,6 +383,244 @@ def _build_ppg_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig)
     )
 
 
+# ---------------------------------------------------------------------------
+# LTSF (long-term time-series forecasting) datasets
+# ---------------------------------------------------------------------------
+
+
+_LTSF_FIXED_SPLITS = {
+    "ETTh1": (12 * 30 * 24, 4 * 30 * 24, 4 * 30 * 24),
+    "ETTh2": (12 * 30 * 24, 4 * 30 * 24, 4 * 30 * 24),
+    "ETTm1": (12 * 30 * 24 * 4, 4 * 30 * 24 * 4, 4 * 30 * 24 * 4),
+    "ETTm2": (12 * 30 * 24 * 4, 4 * 30 * 24 * 4, 4 * 30 * 24 * 4),
+}
+
+_LTSF_DEFAULT_FILES = {
+    "ETTh1": "ETTh1.csv",
+    "ETTh2": "ETTh2.csv",
+    "ETTm1": "ETTm1.csv",
+    "ETTm2": "ETTm2.csv",
+    "Traffic": "traffic.csv",
+    "Electricity": "electricity.csv",
+    "Exchange": "exchange_rate.csv",
+    "ILI": "national_illness.csv",
+}
+
+_LTSF_SENTINEL = -1.0
+
+
+class _LtsfWindowView:
+    """Memory-efficient windowed view of a standardized (T, C) array.
+
+    Mimics the subset of the np.ndarray API that the trainer's batching
+    loop needs (`shape`, `dtype`, `__len__`, fancy `__getitem__`). Each
+    sample is a length-`window_length` window starting at `start + i`,
+    with one half replaced by a sentinel to enforce masked seq2seq.
+
+    `mask_role`:
+      - "input": real data in the first `seq_len` steps, sentinel after.
+      - "target": sentinel in the first `seq_len` steps, real data after.
+    """
+
+    def __init__(
+        self,
+        data: np.ndarray,
+        *,
+        start: int,
+        num_windows: int,
+        seq_len: int,
+        pred_len: int,
+        mask_role: str,
+    ) -> None:
+        if mask_role not in ("input", "target"):
+            raise ValueError(f"Unsupported mask_role: {mask_role!r}")
+        self._data = data
+        self._start = int(start)
+        self._num_windows = int(num_windows)
+        self._seq_len = int(seq_len)
+        self._pred_len = int(pred_len)
+        self._mask_role = mask_role
+        self._window_length = self._seq_len + self._pred_len
+        self.shape = (self._num_windows, self._window_length, int(data.shape[-1]))
+        self.dtype = data.dtype
+
+    def __len__(self) -> int:
+        """Return the number of windows in the split."""
+        return self._num_windows
+
+    def __getitem__(self, index: object) -> np.ndarray:
+        """Materialize the requested window(s) as a contiguous array."""
+        indices = np.asarray(index)
+        scalar = indices.ndim == 0
+        if scalar:
+            indices = indices.reshape(1)
+        starts = self._start + indices.astype(np.int64)
+        offsets = np.arange(self._window_length, dtype=np.int64)
+        gather = starts[:, None] + offsets[None, :]
+        out = self._data[gather]
+        if self._mask_role == "input":
+            out[:, self._seq_len :, :] = _LTSF_SENTINEL
+        else:
+            out[:, : self._seq_len, :] = _LTSF_SENTINEL
+        return out[0] if scalar else out
+
+
+def _resolve_ltsf_csv_path(dataset_root: Path, dataset_name: str, params: dict) -> Path:
+    """Resolve the CSV file for a long-term forecasting dataset."""
+    explicit = params.get("csv_path")
+    if explicit is not None:
+        path = Path(explicit)
+        if not path.is_absolute():
+            path = dataset_root / path
+        if path.exists():
+            return path
+        raise FileNotFoundError(f"LTSF csv_path does not exist: {path}")
+
+    file_name = _LTSF_DEFAULT_FILES.get(dataset_name, f"{dataset_name}.csv")
+    candidates = [
+        dataset_root / file_name,
+        dataset_root / dataset_name / file_name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        f"Could not find LTSF CSV for {dataset_name!r}. Looked in: "
+        f"{[str(p) for p in candidates]}. "
+        f"Run `uv run python scripts/datasets/download_ltsf.py --dataset {dataset_name}` "
+        f"or set dataset.params.csv_path."
+    )
+
+
+def _resolve_ltsf_split_ranges(
+    *, dataset_name: str, num_rows: int, seq_len: int
+) -> dict[str, tuple[int, int]]:
+    """Return contiguous (start, end) row ranges per split.
+
+    Validation/test ranges include a `seq_len`-step lookback overlap into
+    the previous split so that the first window's target lands at the
+    canonical split boundary, matching the Informer/Autoformer convention.
+    """
+    if dataset_name in _LTSF_FIXED_SPLITS:
+        num_train, num_validation, num_test = _LTSF_FIXED_SPLITS[dataset_name]
+    else:
+        num_train = int(num_rows * 0.7)
+        num_test = int(num_rows * 0.2)
+        num_validation = num_rows - num_train - num_test
+
+    if num_train + num_validation + num_test > num_rows:
+        raise ValueError(
+            f"LTSF split sizes exceed dataset length for {dataset_name}: "
+            f"{num_train + num_validation + num_test} > {num_rows}"
+        )
+
+    train_end = num_train
+    validation_end = num_train + num_validation
+    test_end = num_train + num_validation + num_test
+    return {
+        "train": (0, train_end),
+        "validation": (max(0, train_end - seq_len), validation_end),
+        "test": (max(0, validation_end - seq_len), test_end),
+    }
+
+
+def _build_ltsf_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig) -> DatasetBundle:
+    """Build a long-term time-series forecasting dataset in masked seq2seq form.
+
+    Loads a CSV from the Informer/Autoformer benchmark suite, fits a
+    per-channel z-score on the train split only, and exposes stride-1
+    sliding windows of length `seq_len + pred_len`. Inputs replace the
+    last `pred_len` steps with the -1 sentinel; targets replace the first
+    `seq_len` steps with the sentinel. The trainer's `loss_window` then
+    restricts loss/metrics to the final `pred_len` steps.
+
+    Windows are materialized lazily per batch via `_LtsfWindowView`, so
+    only the small (T, C) standardized arrays are held in memory.
+    """
+    import pandas as pd
+
+    dataset_root = resolve_dataset_path(paths_config, dataset_config)
+    dataset_name = dataset_config.resolved_name
+    params = dataset_config.params
+
+    seq_len = int(params.get("seq_len", 720))
+    pred_len = int(params.get("pred_len", 720))
+    if seq_len <= 0 or pred_len <= 0:
+        raise ValueError("LTSF seq_len and pred_len must be positive")
+
+    csv_path = _resolve_ltsf_csv_path(dataset_root, dataset_name, params)
+    dataframe = pd.read_csv(csv_path)
+    if "date" in dataframe.columns:
+        dataframe = dataframe.drop(columns=["date"])
+    feature_columns = [c for c in dataframe.columns if c != "date"]
+    data = dataframe[feature_columns].to_numpy(dtype=np.float64)
+
+    split_ranges = _resolve_ltsf_split_ranges(
+        dataset_name=dataset_name,
+        num_rows=int(data.shape[0]),
+        seq_len=seq_len,
+    )
+
+    train_start, train_end = split_ranges["train"]
+    train_slice = data[train_start:train_end]
+    mean = train_slice.mean(axis=0, keepdims=True)
+    std = train_slice.std(axis=0, keepdims=True)
+    std = np.where(std < 1e-8, 1.0, std)
+    standardized = ((data - mean) / std).astype(np.float32)
+
+    window_length = seq_len + pred_len
+
+    def _make_split(split_name: str) -> DatasetSplit:
+        start, end = split_ranges[split_name]
+        num_windows = end - start - window_length + 1
+        if num_windows <= 0:
+            raise ValueError(
+                f"LTSF dataset {dataset_name!r} split {split_name!r} has "
+                f"{end - start} rows; not enough for seq_len+pred_len={window_length}"
+            )
+        inputs = _LtsfWindowView(
+            standardized,
+            start=start,
+            num_windows=num_windows,
+            seq_len=seq_len,
+            pred_len=pred_len,
+            mask_role="input",
+        )
+        targets = _LtsfWindowView(
+            standardized,
+            start=start,
+            num_windows=num_windows,
+            seq_len=seq_len,
+            pred_len=pred_len,
+            mask_role="target",
+        )
+        return DatasetSplit(inputs, targets)
+
+    train_split = _make_split("train")
+    validation_split = _make_split("validation")
+    test_split = _make_split("test")
+
+    return DatasetBundle(
+        name=dataset_name,
+        task="regression",
+        train=train_split,
+        validation=validation_split,
+        test=test_split,
+        input_dim=int(standardized.shape[-1]),
+        output_dim=int(standardized.shape[-1]),
+        sequence_length=window_length,
+        metadata={
+            "loss_window": pred_len,
+            "seq_len": seq_len,
+            "pred_len": pred_len,
+            "csv_path": str(csv_path),
+            "feature_columns": feature_columns,
+            "channel_mean": mean.squeeze(0).astype(np.float32).tolist(),
+            "channel_std": std.squeeze(0).astype(np.float32).tolist(),
+        },
+    )
+
+
 def _build_weather_dataset(
     paths_config: PathsConfig, dataset_config: DatasetConfig
 ) -> DatasetBundle:
@@ -439,4 +677,6 @@ def build_dataset(paths_config: PathsConfig, dataset_config: DatasetConfig) -> D
         return _build_ppg_dataset(paths_config, dataset_config)
     if dataset_config.kind == "weather":
         return _build_weather_dataset(paths_config, dataset_config)
+    if dataset_config.kind == "ltsf":
+        return _build_ltsf_dataset(paths_config, dataset_config)
     raise ValueError(f"Unsupported dataset kind: {dataset_config.kind}")

@@ -1,0 +1,5 @@
+defaults:
+  - ./ltsf_base
+
+dataset:
+  name: ETTm1

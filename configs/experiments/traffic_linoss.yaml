@@ -1,0 +1,32 @@
+defaults:
+  - ../base
+  - ../datasets/traffic
+  - ../models/linoss
+
+name: linoss-traffic
+seed: 0
+description: LinOSS on the Traffic long-horizon multivariate forecasting task.
+tags:
+  - linoss
+  - traffic
+loader:
+  batch_size: 4
+  eval_batch_size: 4
+model:
+  backbone:
+    kwargs:
+      A_max: 4.0
+      G_max: 3.0
+  head:
+    target: RegressionHead
+    kwargs:
+      reduce: false
+      output_step: 1
+wandb:
+  enabled: false
+  project: discretax-linoss-ltsf
+  job_type: train
+  tags:
+    - LinOSS
+    - Traffic
+    - regression

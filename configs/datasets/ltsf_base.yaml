@@ -1,10 +1,13 @@
 dataset:
-  kind: weather
-  name: weather
-  root: processed/Weather
+  kind: ltsf
+  root: LTSF
   download: false
   sequence_layout: time_major
   normalize: false
   params:
-    loss_window: 720
+    seq_len: 720
+    pred_len: 720
     regression_loss: mse
+trainer:
+  num_epochs: null
+  max_steps: 30000
