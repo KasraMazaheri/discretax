@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import statistics
 from dataclasses import dataclass
@@ -991,19 +992,18 @@ def run_experiment(
 
         for epoch in range(runtime_state.start_epoch, num_epochs):
             epoch_seed = experiment_config.trainer.seed + epoch
-            epoch_batches = list(
-                batch_iterator(
-                    dataset_bundle.train,
-                    experiment_config.loader.batch_size,
-                    shuffle=experiment_config.loader.shuffle_train,
-                    drop_last=experiment_config.loader.drop_last_train,
-                    seed=epoch_seed,
-                )
+            epoch_batches = batch_iterator(
+                dataset_bundle.train,
+                experiment_config.loader.batch_size,
+                shuffle=experiment_config.loader.shuffle_train,
+                drop_last=experiment_config.loader.drop_last_train,
+                seed=epoch_seed,
             )
             batch_start_index = (
                 runtime_state.steps_to_skip_in_epoch if epoch == runtime_state.start_epoch else 0
             )
-            for batch_inputs, batch_targets in epoch_batches[batch_start_index:]:
+            epoch_batches = itertools.islice(epoch_batches, batch_start_index, None)
+            for batch_inputs, batch_targets in epoch_batches:
                 runtime_state.steps_to_skip_in_epoch = 0
                 if runtime_state.final_step >= total_steps:
                     break
