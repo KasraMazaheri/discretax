@@ -87,6 +87,17 @@ MAE_SPEC = MetricSpec(
     vmax=1.0,
 )
 
+LTSF_MSE_SPEC = MetricSpec(
+    column="test_mse",
+    label="Test MSE",
+    higher_is_better=False,
+    cmap="RdYlGn_r",
+    value_format=lambda v: f"{v:.4f}",
+    std_format=lambda s: f"±{s:.4f}",
+    vmin=0.1,
+    vmax=1.5,
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,22 +118,24 @@ def _short(col: str) -> str:
 
 # Columns produced by analyze_sweep.load_job_results that describe the *run
 # outcome* rather than a hyperparameter. Excluded from nuisance detection.
-RESULT_COLS: frozenset[str] = frozenset({
-    "job_id",
-    "job_dir",
-    "score",
-    "test_metric",
-    "test_loss",
-    "test_mse",
-    "test_mae",
-    "test_accuracy",
-    "best_val_metric",
-    "final_step",
-    "duration_seconds",
-    "parameter_count",
-    "median_train_examples_per_second",
-    "median_eval_examples_per_second",
-})
+RESULT_COLS: frozenset[str] = frozenset(
+    {
+        "job_id",
+        "job_dir",
+        "score",
+        "test_metric",
+        "test_loss",
+        "test_mse",
+        "test_mae",
+        "test_accuracy",
+        "best_val_metric",
+        "final_step",
+        "duration_seconds",
+        "parameter_count",
+        "median_train_examples_per_second",
+        "median_eval_examples_per_second",
+    }
+)
 
 
 def _safe_nunique(series: pd.Series) -> int:
@@ -178,7 +191,9 @@ def _two_stage_agg(
     nuisance_cols: list[str],
     value_col: str,
 ) -> pd.DataFrame:
-    """Stage 1: mean over seeds within each (group + nuisance) config.
+    """Aggregate seed-mean per config, then aggregate across nuisance.
+
+    Stage 1: mean over seeds within each (group + nuisance) config.
     Stage 2: aggregate across nuisance to get mean/std/min/max/count per group.
     """
     present_nuisance = [c for c in nuisance_cols if c in df.columns]
@@ -242,18 +257,20 @@ def _count_grid(df: pd.DataFrame, row_col: str, col_col: str, value_col: str) ->
 # Plotting
 # ---------------------------------------------------------------------------
 
-plt.rcParams.update({
-    "font.family": "serif",
-    "font.size": 11,
-    "axes.titlesize": 13,
-    "axes.labelsize": 12,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
-    "figure.dpi": 150,
-    "savefig.dpi": 300,
-    "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.1,
-})
+plt.rcParams.update(
+    {
+        "font.family": "serif",
+        "font.size": 11,
+        "axes.titlesize": 13,
+        "axes.labelsize": 12,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "figure.dpi": 150,
+        "savefig.dpi": 300,
+        "savefig.bbox": "tight",
+        "savefig.pad_inches": 0.1,
+    }
+)
 
 
 def _norm_for(spec: MetricSpec, values: np.ndarray) -> mcolors.Normalize:
@@ -292,8 +309,16 @@ def plot_metric_heatmap(
                     text += f"\n{spec.std_format(std_data[i, j])}"
                 bg = cmap_obj(norm(val))
             lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]
-            ax.text(j, i, text, ha="center", va="center", fontsize=9,
-                    color="white" if lum < 0.5 else "black", fontweight="medium")
+            ax.text(
+                j,
+                i,
+                text,
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="white" if lum < 0.5 else "black",
+                fontweight="medium",
+            )
 
     ax.set_xticks(range(len(primary_pivot.columns)))
     ax.set_xticklabels([f"{v}" for v in primary_pivot.columns])
@@ -385,14 +410,22 @@ def plot_ag_surface_3d(
 
     norm = _norm_for(spec, mean_grid)
     scatter = ax.scatter(
-        R_plot, C_plot, Z_all,
-        c=Z_all, cmap=spec.cmap, norm=norm,
-        s=70, edgecolors="black", linewidth=0.4, depthshade=True, zorder=5,
+        R_plot,
+        C_plot,
+        Z_all,
+        c=Z_all,
+        cmap=spec.cmap,
+        norm=norm,
+        s=70,
+        edgecolors="black",
+        linewidth=0.4,
+        depthshade=True,
+        zorder=5,
     )
 
     plane_label = ""
     if len(R_fit_t) >= 3:
-        W_sqrt = np.sqrt(1.0 / S_fit ** 2)
+        W_sqrt = np.sqrt(1.0 / S_fit**2)
         X = np.column_stack([R_fit_t, C_fit_t, np.ones_like(R_fit_t)])
         coeffs, _, _, _ = np.linalg.lstsq(X * W_sqrt[:, None], Z_fit * W_sqrt, rcond=None)
         a, b, c = coeffs
@@ -401,8 +434,12 @@ def plot_ag_surface_3d(
         C_range = np.linspace(c_min, c_max, 30)
         R_mesh, C_mesh = np.meshgrid(R_range, C_range)
         ax.plot_surface(
-            R_mesh, C_mesh, a * R_mesh + b * C_mesh + c,
-            alpha=0.25, color="steelblue", zorder=1,
+            R_mesh,
+            C_mesh,
+            a * R_mesh + b * C_mesh + c,
+            alpha=0.25,
+            color="steelblue",
+            zorder=1,
         )
         plane_label = (
             f"\nplane: {spec.label} = {a:+.4f}·{plot_row_label} "
@@ -451,8 +488,15 @@ def plot_metric_bars(
     colors = [cmap_obj(norm(v)) for v in values]
 
     bars = ax.bar(
-        x, values, width=0.8, color=colors, edgecolor="black", linewidth=0.5,
-        yerr=stds if show_std else None, capsize=4, error_kw={"linewidth": 1.2},
+        x,
+        values,
+        width=0.8,
+        color=colors,
+        edgecolor="black",
+        linewidth=0.5,
+        yerr=stds if show_std else None,
+        capsize=4,
+        error_kw={"linewidth": 1.2},
     )
 
     data_max = float(np.nanmax(values)) if values.size else 1.0
@@ -466,8 +510,15 @@ def plot_metric_bars(
         if show_std and stds is not None and not np.isnan(stds[i]):
             label += f"\n{spec.std_format(stds[i])}"
             whisker_top += stds[i]
-        ax.text(bar.get_x() + bar.get_width() / 2, whisker_top + label_pad, label,
-                ha="center", va="bottom", fontsize=9, fontweight="medium")
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            whisker_top + label_pad,
+            label,
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            fontweight="medium",
+        )
 
     ax.set_xticks(x)
     ax.set_xticklabels(bar_df[category_col].values)
@@ -530,13 +581,21 @@ def _study_metric_grid(
     print(f"\n  Grid shape: {mean_pivot.shape[0]} × {mean_pivot.shape[1]}")
     print(f"  Runs per cell: {count_pivot.min().min():.0f}–{count_pivot.max().max():.0f}")
     print(f"  Mean range: {mean_pivot.min().min():.4f} – {mean_pivot.max().max():.4f}")
-    print(f"  Best ({best_agg}) range: {best_pivot.min().min():.4f} – {best_pivot.max().max():.4f}")
+    print(
+        f"  Best ({best_agg}) range: {best_pivot.min().min():.4f} – {best_pivot.max().max():.4f}"
+    )
 
-    for agg_name, pivot, show_std in [("mean", mean_pivot, std_pivot), (best_agg, best_pivot, None)]:
+    for agg_name, pivot, show_std in [
+        ("mean", mean_pivot, std_pivot),
+        (best_agg, best_pivot, None),
+    ]:
         fig = plot_metric_heatmap(
-            pivot, show_std, spec,
+            pivot,
+            show_std,
+            spec,
             title=f"{title}\n({agg_name} {spec.label.lower()}, agg over {nuisance_str})",
-            xlabel=col_label, ylabel=row_label,
+            xlabel=col_label,
+            ylabel=row_label,
         )
         out_path = output_dir / f"study_{file_tag}_{agg_name}.png"
         fig.savefig(out_path)
@@ -547,7 +606,8 @@ def _study_metric_grid(
         row_vals = np.array(mean_pivot.index, dtype=float)
         col_vals = np.array(mean_pivot.columns, dtype=float)
         fig = plot_ag_surface_3d(
-            row_vals, col_vals,
+            row_vals,
+            col_vals,
             mean_pivot.values.astype(float),
             std_pivot.values.astype(float),
             spec,
@@ -594,7 +654,9 @@ def _study_metric_bars_1d(
     for agg_name in ["mean", best_agg]:
         bar_df = _bar_metric(df, category_col, nuisance, spec, agg=agg_name)
         fig = plot_metric_bars(
-            bar_df, category_col, spec,
+            bar_df,
+            category_col,
+            spec,
             title=f"{title}\n({agg_name} {spec.label.lower()}, agg over {nuisance_str})",
             xlabel=xlabel if xlabel is not None else category_label,
             show_std=(agg_name == "mean"),
@@ -615,23 +677,48 @@ def _study_metric_bars_1d(
 class DatasetConfig:
     """Per-dataset config for the standard AG-init grid + undamped baseline studies."""
 
-    display: str          # used in figure titles
+    display: str  # used in figure titles
     spec: MetricSpec
-    ag_sweep: str         # AG-init grid sweep
+    ag_sweep: str  # AG-init grid sweep
     baseline_sweep: str | None = None
 
 
 # Adding a new dataset: drop a DatasetConfig in here. file_tag is the dict key.
 DATASETS: dict[str, DatasetConfig] = {
-    "cifar":      DatasetConfig("Damped LinOSS",            ACCURACY_SPEC, "cifar10-linoss-damped-sweep-ag", "cifar10-linoss-sweep"),
-    "ppg":        DatasetConfig("PPG Damped LinOSS",        MSE_SPEC,      "ppg-init",                       "ppg/undamped/oscillatory-init-sweep"),
-    "weather":    DatasetConfig("Weather Damped LinOSS",    MAE_SPEC,      "weather-init",                   "ppg/undamped/oscillatory-init-sweep"),
-    "scp1":       DatasetConfig("SCP1 Damped LinOSS",       ACCURACY_SPEC, "scp1-init-sweep",                "scp1-undamped-init"),
-    "ethanol":    DatasetConfig("Ethanol Damped LinOSS",    ACCURACY_SPEC, "ethanol-init-sweep",             "ethanol-undamped-init"),
-    "heartbeat":  DatasetConfig("Heartbeat Damped LinOSS",  ACCURACY_SPEC, "heartbeat-init-sweep",           "heartbeat/undamped/init"),
-    "scp2":       DatasetConfig("SCP2 Damped LinOSS",       ACCURACY_SPEC, "scp2-init-sweep",                "scp2/undamped/init"),
-    "motor":      DatasetConfig("Motor Damped LinOSS",      ACCURACY_SPEC, "motor-init-sweep",               "motor/undamped/init"),
-    "eigenworms": DatasetConfig("EigenWorms Damped LinOSS", ACCURACY_SPEC, "eigenworms-init-sweep",          "eigenworms/undamped/init"),
+    "cifar": DatasetConfig(
+        "Damped LinOSS", ACCURACY_SPEC, "cifar10-linoss-damped-sweep-ag", "cifar10-linoss-sweep"
+    ),
+    "ppg": DatasetConfig(
+        "PPG Damped LinOSS", MSE_SPEC, "ppg-init", "ppg/undamped/oscillatory-init-sweep"
+    ),
+    "weather": DatasetConfig("Weather Damped LinOSS", LTSF_MSE_SPEC, "weather-init", None),
+    "etth1": DatasetConfig("ETTh1 Damped LinOSS", LTSF_MSE_SPEC, "etth1-init", None),
+    "etth2": DatasetConfig("ETTh2 Damped LinOSS", LTSF_MSE_SPEC, "etth2-init", None),
+    "ettm1": DatasetConfig("ETTm1 Damped LinOSS", LTSF_MSE_SPEC, "ettm1-init", None),
+    "electricity": DatasetConfig(
+        "Electricity Damped LinOSS", LTSF_MSE_SPEC, "electricity-init", None
+    ),
+    "scp1": DatasetConfig(
+        "SCP1 Damped LinOSS", ACCURACY_SPEC, "scp1-init-sweep", "scp1-undamped-init"
+    ),
+    "ethanol": DatasetConfig(
+        "Ethanol Damped LinOSS", ACCURACY_SPEC, "ethanol-init-sweep", "ethanol-undamped-init"
+    ),
+    "heartbeat": DatasetConfig(
+        "Heartbeat Damped LinOSS", ACCURACY_SPEC, "heartbeat-init-sweep", "heartbeat/undamped/init"
+    ),
+    "scp2": DatasetConfig(
+        "SCP2 Damped LinOSS", ACCURACY_SPEC, "scp2-init-sweep", "scp2/undamped/init"
+    ),
+    "motor": DatasetConfig(
+        "Motor Damped LinOSS", ACCURACY_SPEC, "motor-init-sweep", "motor/undamped/init"
+    ),
+    "eigenworms": DatasetConfig(
+        "EigenWorms Damped LinOSS",
+        ACCURACY_SPEC,
+        "eigenworms-init-sweep",
+        "eigenworms/undamped/init",
+    ),
 }
 
 
@@ -641,15 +728,23 @@ def make_init_study(key: str) -> Callable[[Path, Path], None]:
 
     def run(sweeps_root: Path, output_dir: Path) -> None:
         _study_metric_grid(
-            sweeps_root, output_dir,
-            sweep_name=cfg.ag_sweep, row_col=_bk("A_max"), col_col=_bk("G_max"),
-            spec=cfg.spec, title=f"{cfg.display} — AG Initialization",
-            file_tag=f"{key}_init_ag", plot_3d=True, log_scale=True,
+            sweeps_root,
+            output_dir,
+            sweep_name=cfg.ag_sweep,
+            row_col=_bk("A_max"),
+            col_col=_bk("G_max"),
+            spec=cfg.spec,
+            title=f"{cfg.display} — AG Initialization",
+            file_tag=f"{key}_init_ag",
+            plot_3d=True,
+            log_scale=True,
         )
         if cfg.baseline_sweep is not None:
             _study_metric_bars_1d(
-                sweeps_root, output_dir,
-                sweep_name=cfg.baseline_sweep, category_col=_bk("A_max"),
+                sweeps_root,
+                output_dir,
+                sweep_name=cfg.baseline_sweep,
+                category_col=_bk("A_max"),
                 spec=cfg.spec,
                 title=f"{cfg.display.replace('Damped', 'Baseline')} — Initialization",
                 file_tag=f"{key}_baseline_init",
@@ -668,10 +763,13 @@ def make_init_study(key: str) -> Callable[[Path, Path], None]:
 def study_cifar_init_rt(sweeps_root: Path, output_dir: Path) -> None:
     """CIFAR-10 damped LinOSS — RT init grid (r_min × theta_max)."""
     _study_metric_grid(
-        sweeps_root, output_dir,
+        sweeps_root,
+        output_dir,
         sweep_name="cifar10-linoss-damped-sweep",
-        row_col=_bk("r_min"), col_col=_bk("theta_max"),
-        spec=ACCURACY_SPEC, title="Damped LinOSS — RT Initialization",
+        row_col=_bk("r_min"),
+        col_col=_bk("theta_max"),
+        spec=ACCURACY_SPEC,
+        title="Damped LinOSS — RT Initialization",
         file_tag="damped_init_rt",
     )
 
@@ -679,7 +777,8 @@ def study_cifar_init_rt(sweeps_root: Path, output_dir: Path) -> None:
 def study_cifar_discretization(sweeps_root: Path, output_dir: Path) -> None:
     """CIFAR-10 damped LinOSS — discretization comparison (conditioned on AG init)."""
     _study_metric_bars_1d(
-        sweeps_root, output_dir,
+        sweeps_root,
+        output_dir,
         sweep_name="cifar10-linoss-damped-sweep-ag",
         category_col=_bk("discretization"),
         spec=ACCURACY_SPEC,
@@ -710,7 +809,8 @@ def _study_multihead(
     """Bar chart of num_heads effect with a gating/output_projection filter."""
     gate_str = "Gated" if use_gating else "No Gating"
     proj_str = "Output Proj" if use_output_proj else "No Output Proj"
-    print(f"\n{'=' * 60}\nSTUDY: Multi-Head ({label}) — {gate_str}, {proj_str}  [{spec.label}]\n{'=' * 60}")
+    header = f"STUDY: Multi-Head ({label}) — {gate_str}, {proj_str}  [{spec.label}]"
+    print(f"\n{'=' * 60}\n{header}\n{'=' * 60}")
 
     df = _load_sweep(sweeps_root, sweep_name)
     if df.empty:
@@ -739,7 +839,8 @@ def _study_multihead(
 
     params_by_heads = (
         df_filt.groupby(heads_col)["parameter_count"].mean().sort_index()
-        if "parameter_count" in df_filt.columns else None
+        if "parameter_count" in df_filt.columns
+        else None
     )
 
     best_agg = _best_agg(spec)
@@ -747,13 +848,18 @@ def _study_multihead(
         bar_df = _bar_metric(df_filt, heads_col, nuisance, spec, agg=agg_name)
         params_values = (
             params_by_heads.reindex(bar_df[heads_col].values).values
-            if params_by_heads is not None else None
+            if params_by_heads is not None
+            else None
         )
         fig = plot_metric_bars(
-            bar_df, heads_col, spec,
+            bar_df,
+            heads_col,
+            spec,
             title=f"Multi-Head ({gate_str}, {proj_str})\n"
-                  f"({agg_name} {spec.label.lower()}, agg over remaining hparams & seeds)",
-            xlabel="num_heads", ylim=ylim, show_std=(agg_name == "mean"),
+            f"({agg_name} {spec.label.lower()}, agg over remaining hparams & seeds)",
+            xlabel="num_heads",
+            ylim=ylim,
+            show_std=(agg_name == "mean"),
             params_values=params_values,
         )
         out_path = output_dir / f"study_multihead_{file_tag}_{agg_name}.png"
@@ -781,28 +887,58 @@ _CIFAR_UNDAMPED_MH = "cifar10-linoss-gate-multihead-sweep"
 # Each registry key bundles the multihead studies that share a chart family.
 MULTIHEAD_STUDIES: dict[str, list[MultiheadStudy]] = {
     "cifar_multihead": [
-        MultiheadStudy("cifar_damped_bare",     _CIFAR_DAMPED_MH,   "Damped",   False, False, ylim=(0.0, 1.0)),
-        MultiheadStudy("cifar_undamped_bare",   _CIFAR_UNDAMPED_MH, "Undamped", False, False),
-        MultiheadStudy("cifar_damped_gated",    _CIFAR_DAMPED_MH,   "Damped",   True,  True),
-        MultiheadStudy("cifar_undamped_gated",  _CIFAR_UNDAMPED_MH, "Undamped", True,  True),
+        MultiheadStudy(
+            "cifar_damped_bare", _CIFAR_DAMPED_MH, "Damped", False, False, ylim=(0.0, 1.0)
+        ),
+        MultiheadStudy("cifar_undamped_bare", _CIFAR_UNDAMPED_MH, "Undamped", False, False),
+        MultiheadStudy("cifar_damped_gated", _CIFAR_DAMPED_MH, "Damped", True, True),
+        MultiheadStudy("cifar_undamped_gated", _CIFAR_UNDAMPED_MH, "Undamped", True, True),
     ],
     "ppg_multihead": [
-        MultiheadStudy("ppg_damped_bare",  "ppg/damped/hidden-param-equal-multiheading",       "PPG Damped", False, False, spec=MSE_SPEC),
-        MultiheadStudy("ppg_damped_proj",  "ppg/damped/hidden-param-equal-multiheading-proj",  "PPG Damped", False, True,  spec=MSE_SPEC),
-        MultiheadStudy("ppg_damped_gated", "ppg/damped/param-equal-gating-multiheading",       "PPG Damped", True,  True,  spec=MSE_SPEC),
+        MultiheadStudy(
+            "ppg_damped_bare",
+            "ppg/damped/hidden-param-equal-multiheading",
+            "PPG Damped",
+            False,
+            False,
+            spec=MSE_SPEC,
+        ),
+        MultiheadStudy(
+            "ppg_damped_proj",
+            "ppg/damped/hidden-param-equal-multiheading-proj",
+            "PPG Damped",
+            False,
+            True,
+            spec=MSE_SPEC,
+        ),
+        MultiheadStudy(
+            "ppg_damped_gated",
+            "ppg/damped/param-equal-gating-multiheading",
+            "PPG Damped",
+            True,
+            True,
+            spec=MSE_SPEC,
+        ),
     ],
 }
 
 
 def make_multihead_study(study: MultiheadStudy) -> Callable[[Path, Path], None]:
     """Build a study fn from a MultiheadStudy spec."""
+
     def run(sweeps_root: Path, output_dir: Path) -> None:
         _study_multihead(
-            sweeps_root, output_dir,
-            sweep_name=study.sweep_name, label=study.label, file_tag=study.file_tag,
-            use_gating=study.use_gating, use_output_proj=study.use_output_proj,
-            spec=study.spec, ylim=study.ylim,
+            sweeps_root,
+            output_dir,
+            sweep_name=study.sweep_name,
+            label=study.label,
+            file_tag=study.file_tag,
+            use_gating=study.use_gating,
+            use_output_proj=study.use_output_proj,
+            spec=study.spec,
+            ylim=study.ylim,
         )
+
     run.__name__ = f"study_multihead_{study.file_tag}"
     return run
 
@@ -821,7 +957,10 @@ def make_multihead_study(study: MultiheadStudy) -> Callable[[Path, Path], None]:
 # Hyperparameters that define a "configuration" within a scenario sweep — the
 # axes we average over (along with seeds) when computing per-config seed-mean.
 _SCENARIO_CONFIG_COLS: tuple[str, ...] = (
-    "model_hidden_dim", _bk("state_dim"), _bk("num_blocks"), "optimizer_learning_rate",
+    "model_hidden_dim",
+    _bk("state_dim"),
+    _bk("num_blocks"),
+    "optimizer_learning_rate",
 )
 _SCENARIO_VAL_COL = "best_val_metric"
 
@@ -849,7 +988,9 @@ class ScenarioDataset:
 
 
 def default_scenarios(slug: str) -> tuple[ScenarioDef, ...]:
-    """Standard 6-scenario tuple. Assumes sweeps live at:
+    """Build the standard 6-scenario tuple.
+
+    Assumes sweeps live at:
 
       {slug}/undamped/notime-sweep
       {slug}/damped/notime-sweep
@@ -858,17 +999,17 @@ def default_scenarios(slug: str) -> tuple[ScenarioDef, ...]:
     For other layouts, write the ScenarioDef list out by hand.
     """
     return (
-        ScenarioDef("undamped\nH=1",      f"{slug}/undamped/notime-sweep",              1, False),
-        ScenarioDef("damped\nH=1",        f"{slug}/damped/notime-sweep",                1, False),
-        ScenarioDef("damped\nH=2",        f"{slug}/damped/notime-multiheading-sweep",   2, False),
-        ScenarioDef("damped\nH=2, proj",  f"{slug}/damped/notime-multiheading-sweep",   2, True),
-        ScenarioDef("damped\nH=4",        f"{slug}/damped/notime-multiheading-sweep",   4, False),
-        ScenarioDef("damped\nH=4, proj",  f"{slug}/damped/notime-multiheading-sweep",   4, True),
+        ScenarioDef("undamped\nH=1", f"{slug}/undamped/notime-sweep", 1, False),
+        ScenarioDef("damped\nH=1", f"{slug}/damped/notime-sweep", 1, False),
+        ScenarioDef("damped\nH=2", f"{slug}/damped/notime-multiheading-sweep", 2, False),
+        ScenarioDef("damped\nH=2, proj", f"{slug}/damped/notime-multiheading-sweep", 2, True),
+        ScenarioDef("damped\nH=4", f"{slug}/damped/notime-multiheading-sweep", 4, False),
+        ScenarioDef("damped\nH=4, proj", f"{slug}/damped/notime-multiheading-sweep", 4, True),
     )
 
 
 SCENARIO_DATASETS: dict[str, ScenarioDataset] = {
-    "scp1":    ScenarioDataset("SCP1",    "scp1",    default_scenarios("scp1")),
+    "scp1": ScenarioDataset("SCP1", "scp1", default_scenarios("scp1")),
     "ethanol": ScenarioDataset("Ethanol", "ethanol", default_scenarios("ethanol")),
 }
 
@@ -935,7 +1076,9 @@ def _load_scenarios(
             mask &= df[proj_col] == sc.use_output_proj
         sub = df[mask]
         if sub.empty:
-            print(f"  [{flat_label}] no runs match heads={sc.num_heads}, proj={sc.use_output_proj}")
+            print(
+                f"  [{flat_label}] no runs match heads={sc.num_heads}, proj={sc.use_output_proj}"
+            )
             continue
 
         config_scores = _scenario_config_means(sub, value_col, dataset.config_cols)
@@ -944,8 +1087,10 @@ def _load_scenarios(
         ranking_col = "val" if select_by == "val" else "test"
         idx = _select_idx(config_scores[ranking_col], spec.higher_is_better)
         chosen_test = config_scores.loc[idx, "test"] if idx is not None else float("nan")
-        print(f"  [{flat_label}] runs={len(sub)}  configs={len(config_scores)}  "
-              f"chosen test (by {ranking_col})={spec.value_format(chosen_test)}")
+        print(
+            f"  [{flat_label}] runs={len(sub)}  configs={len(config_scores)}  "
+            f"chosen test (by {ranking_col})={spec.value_format(chosen_test)}"
+        )
     return scenarios
 
 
@@ -970,7 +1115,11 @@ def _scenario_selected_test(
 
 
 def _plot_scenario_best_bars(
-    scenarios: dict[str, pd.DataFrame], spec: MetricSpec, title: str, *, select_by: str,
+    scenarios: dict[str, pd.DataFrame],
+    spec: MetricSpec,
+    title: str,
+    *,
+    select_by: str,
 ) -> plt.Figure:
     """Bar chart of the selected per-config seed-mean test score per scenario."""
     labels = list(scenarios.keys())
@@ -983,8 +1132,15 @@ def _plot_scenario_best_bars(
     colors = [cmap_obj(norm(v)) for v in best]
     yerr = np.where(np.isnan(best_std), 0.0, best_std)
     bars = ax.bar(
-        x, best, width=0.75, color=colors, edgecolor="black", linewidth=0.5,
-        yerr=yerr, capsize=4, error_kw={"linewidth": 1.2, "ecolor": "black"},
+        x,
+        best,
+        width=0.75,
+        color=colors,
+        edgecolor="black",
+        linewidth=0.5,
+        yerr=yerr,
+        capsize=4,
+        error_kw={"linewidth": 1.2, "ecolor": "black"},
     )
     pad = max(abs(np.nanmax(best) - np.nanmin(best)) * 0.01, 1e-6)
     for bar, v, s in zip(bars, best, best_std):
@@ -992,8 +1148,15 @@ def _plot_scenario_best_bars(
             continue
         whisker_top = bar.get_height() + (s if not np.isnan(s) else 0.0)
         label = spec.value_format(v) + (f"\n{spec.std_format(s)}" if not np.isnan(s) else "")
-        ax.text(bar.get_x() + bar.get_width() / 2, whisker_top + pad, label,
-                ha="center", va="bottom", fontsize=9, fontweight="medium")
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            whisker_top + pad,
+            label,
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            fontweight="medium",
+        )
 
     selection_desc = "max val" if select_by == "val" else "max test"
     ax.set_xticks(x)
@@ -1007,8 +1170,12 @@ def _plot_scenario_best_bars(
 
 
 def _plot_scenario_histograms(
-    scenarios: dict[str, pd.DataFrame], spec: MetricSpec, title: str, *,
-    select_by: str, n_configs: int,
+    scenarios: dict[str, pd.DataFrame],
+    spec: MetricSpec,
+    title: str,
+    *,
+    select_by: str,
+    n_configs: int,
 ) -> plt.Figure:
     """Small-multiples histogram of per-config seed-mean test scores."""
     labels = list(scenarios.keys())
@@ -1021,8 +1188,9 @@ def _plot_scenario_histograms(
     pad = max((hi - lo) * 0.05, 1e-3)
     bins = np.linspace(lo - pad, hi + pad, 21)
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 3.0 * nrows),
-                             sharex=True, sharey=True)
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(4.2 * ncols, 3.0 * nrows), sharex=True, sharey=True
+    )
     axes = np.atleast_1d(axes).flatten()
 
     ranking_col = "val" if select_by == "val" else "test"
@@ -1037,9 +1205,15 @@ def _plot_scenario_histograms(
             ax.axvline(chosen, color="crimson", linestyle="--", linewidth=1.2, label="selected")
         if not np.isnan(mean_val):
             ax.axvline(mean_val, color="black", linestyle=":", linewidth=1.2, label="mean")
-        ax.text(0.98, 0.95,
-                f"selected={spec.value_format(chosen)}\nmean={spec.value_format(mean_val)}\nn={len(test_values)}",
-                transform=ax.transAxes, ha="right", va="top", fontsize=8)
+        ax.text(
+            0.98,
+            0.95,
+            f"selected={spec.value_format(chosen)}\nmean={spec.value_format(mean_val)}\nn={len(test_values)}",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8,
+        )
         ax.set_title(label.replace("\n", " — "), fontsize=11)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -1058,8 +1232,12 @@ def _plot_scenario_histograms(
 
 
 def _plot_scenario_histogram_overlay(
-    scenarios: dict[str, pd.DataFrame], spec: MetricSpec, title: str, *,
-    select_by: str, n_configs: int,
+    scenarios: dict[str, pd.DataFrame],
+    spec: MetricSpec,
+    title: str,
+    *,
+    select_by: str,
+    n_configs: int,
 ) -> plt.Figure:
     """All scenarios overlaid on a single axis for direct distribution comparison."""
     labels = list(scenarios.keys())
@@ -1076,12 +1254,20 @@ def _plot_scenario_histogram_overlay(
     for label, color in zip(labels, colors):
         df = scenarios[label]
         test_values = df["test"].values
-        ax.hist(test_values, bins=bins, color=color, alpha=0.35,
-                edgecolor=color, linewidth=1.0, label=label.replace("\n", " "))
+        ax.hist(
+            test_values,
+            bins=bins,
+            color=color,
+            alpha=0.35,
+            edgecolor=color,
+            linewidth=1.0,
+            label=label.replace("\n", " "),
+        )
         idx = _select_idx(df[ranking_col], spec.higher_is_better)
         if idx is not None:
-            ax.axvline(float(df.loc[idx, "test"]), color=color, linestyle="-",
-                       linewidth=1.6, alpha=0.9)
+            ax.axvline(
+                float(df.loc[idx, "test"]), color=color, linestyle="-", linewidth=1.6, alpha=0.9
+            )
         mean_val = float(np.nanmean(test_values))
         if not np.isnan(mean_val):
             ax.axvline(mean_val, color=color, linestyle=":", linewidth=1.4, alpha=0.9)
@@ -1104,15 +1290,21 @@ def _plot_scenario_histogram_overlay(
 
 
 def _run_scenario_study(
-    sweeps_root: Path, output_dir: Path, dataset: ScenarioDataset, *, select_by: str,
+    sweeps_root: Path,
+    output_dir: Path,
+    dataset: ScenarioDataset,
+    *,
+    select_by: str,
 ) -> None:
     """Run bar + small-multiples + overlay plots for one (dataset, select_by)."""
     if select_by not in ("test", "val"):
         raise ValueError(f"select_by must be 'test' or 'val', got {select_by!r}")
 
     spec = dataset.spec
-    print(f"\n{'=' * 60}\nSTUDY: {dataset.display} Scenario Comparison "
-          f"(select_by={select_by})  [{spec.label}]\n{'=' * 60}")
+    print(
+        f"\n{'=' * 60}\nSTUDY: {dataset.display} Scenario Comparison "
+        f"(select_by={select_by})  [{spec.label}]\n{'=' * 60}"
+    )
 
     scenarios = _load_scenarios(sweeps_root, dataset, select_by=select_by)
     if not scenarios:
@@ -1123,15 +1315,24 @@ def _run_scenario_study(
     fp = dataset.file_prefix
 
     plots = [
-        (_plot_scenario_best_bars,
-         f"{dataset.display} — {desc.capitalize()} test accuracy by scenario",
-         f"study_{fp}_scenarios_best_by_{select_by}.png", {}),
-        (_plot_scenario_histograms,
-         f"{dataset.display} — Distribution of per-config seed-mean test accuracy ({desc})",
-         f"study_{fp}_scenarios_hist_by_{select_by}.png", {"n_configs": dataset.n_configs}),
-        (_plot_scenario_histogram_overlay,
-         f"{dataset.display} — Overlaid per-config test-accuracy distributions ({desc})",
-         f"study_{fp}_scenarios_hist_overlay_by_{select_by}.png", {"n_configs": dataset.n_configs}),
+        (
+            _plot_scenario_best_bars,
+            f"{dataset.display} — {desc.capitalize()} test accuracy by scenario",
+            f"study_{fp}_scenarios_best_by_{select_by}.png",
+            {},
+        ),
+        (
+            _plot_scenario_histograms,
+            f"{dataset.display} — Distribution of per-config seed-mean test accuracy ({desc})",
+            f"study_{fp}_scenarios_hist_by_{select_by}.png",
+            {"n_configs": dataset.n_configs},
+        ),
+        (
+            _plot_scenario_histogram_overlay,
+            f"{dataset.display} — Overlaid per-config test-accuracy distributions ({desc})",
+            f"study_{fp}_scenarios_hist_overlay_by_{select_by}.png",
+            {"n_configs": dataset.n_configs},
+        ),
     ]
     for plot_fn, title, fname, extra in plots:
         fig = plot_fn(scenarios, spec, title, select_by=select_by, **extra)
@@ -1182,8 +1383,10 @@ def study_uea_avg_ag_3d(sweeps_root: Path, output_dir: Path) -> None:
         nuisance = _compute_nuisance(df, {row_col, col_col})
         mean_pivot, _ = _pivot_metric_grid(df, row_col, col_col, nuisance, spec, "mean")
         grids.append((key, mean_pivot))
-        print(f"  Loaded {key}: grid {mean_pivot.shape}, "
-              f"mean range {mean_pivot.min().min():.4f}–{mean_pivot.max().max():.4f}")
+        print(
+            f"  Loaded {key}: grid {mean_pivot.shape}, "
+            f"mean range {mean_pivot.min().min():.4f}–{mean_pivot.max().max():.4f}"
+        )
 
     if not grids:
         print("  No datasets loaded, skipping")
@@ -1195,10 +1398,9 @@ def study_uea_avg_ag_3d(sweeps_root: Path, output_dir: Path) -> None:
         print("  No common (A_max, G_max) cells across datasets, skipping")
         return
 
-    stacked = np.stack([
-        g.reindex(index=common_index, columns=common_cols).values.astype(float)
-        for _, g in grids
-    ])
+    stacked = np.stack(
+        [g.reindex(index=common_index, columns=common_cols).values.astype(float) for _, g in grids]
+    )
     avg_grid = np.nanmean(stacked, axis=0)
     std_grid = np.nanstd(stacked, axis=0, ddof=1)
 
@@ -1211,9 +1413,12 @@ def study_uea_avg_ag_3d(sweeps_root: Path, output_dir: Path) -> None:
     mean_df = pd.DataFrame(avg_grid, index=common_index, columns=common_cols)
     std_df = pd.DataFrame(std_grid, index=common_index, columns=common_cols)
     fig = plot_metric_heatmap(
-        mean_df, std_df, spec,
+        mean_df,
+        std_df,
+        spec,
         title=f"UEA Average — AG Initialization\n({dataset_names})",
-        xlabel="G_max", ylabel="A_max",
+        xlabel="G_max",
+        ylabel="A_max",
     )
     out_path = output_dir / "study_uea_avg_ag_mean.png"
     fig.savefig(out_path)
@@ -1221,7 +1426,11 @@ def study_uea_avg_ag_3d(sweeps_root: Path, output_dir: Path) -> None:
     plt.close(fig)
 
     fig = plot_ag_surface_3d(
-        row_vals, col_vals, avg_grid, std_grid, spec,
+        row_vals,
+        col_vals,
+        avg_grid,
+        std_grid,
+        spec,
         title=f"UEA Average — AG Initialization\n({dataset_names})",
         row_label="A_max",
         col_label="G_max",
@@ -1272,12 +1481,21 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("sweeps_root", type=Path,
-                        help="Root directory containing sweep subdirectories")
-    parser.add_argument("--studies", nargs="*", default=None,
-                        help=f"Which studies to run. Options: {', '.join(STUDIES.keys())}. Default: all.")
-    parser.add_argument("--output", type=Path, default=Path("figures"),
-                        help="Output directory for figures (default: figures/)")
+    parser.add_argument(
+        "sweeps_root", type=Path, help="Root directory containing sweep subdirectories"
+    )
+    parser.add_argument(
+        "--studies",
+        nargs="*",
+        default=None,
+        help=f"Which studies to run. Options: {', '.join(STUDIES.keys())}. Default: all.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("figures"),
+        help="Output directory for figures (default: figures/)",
+    )
     args = parser.parse_args()
 
     if not args.sweeps_root.exists():
@@ -1300,5 +1518,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

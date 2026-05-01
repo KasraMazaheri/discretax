@@ -13,7 +13,7 @@ model:
   backbone:
     kwargs:
       A_max: 4.0
-      G_max: 3.0
+      G_max: 0.8
   head:
     target: RegressionHead
     kwargs:
