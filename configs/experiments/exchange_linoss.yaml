@@ -9,9 +9,6 @@ description: LinOSS on the Exchange-Rate long-horizon multivariate forecasting t
 tags:
   - linoss
   - exchange
-loader:
-  batch_size: 4
-  eval_batch_size: 4
 model:
   backbone:
     kwargs:

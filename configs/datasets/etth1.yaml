@@ -3,3 +3,5 @@ defaults:
 
 dataset:
   name: ETTh1
+trainer:
+  eval_every_steps: 50

@@ -9,9 +9,6 @@ description: LinOSS on the Weather long-horizon multivariate forecasting task.
 tags:
   - linoss
   - weather
-loader:
-  batch_size: 4
-  eval_batch_size: 4
 model:
   backbone:
     kwargs:
@@ -22,8 +19,6 @@ model:
     kwargs:
       reduce: false
       output_step: 1
-trainer:
-  num_epochs: 5
 wandb:
   enabled: true
   mode: online

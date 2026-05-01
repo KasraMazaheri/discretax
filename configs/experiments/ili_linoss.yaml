@@ -9,9 +9,6 @@ description: LinOSS on the ILI (national_illness) long-horizon multivariate fore
 tags:
   - linoss
   - ili
-loader:
-  batch_size: 4
-  eval_batch_size: 4
 model:
   backbone:
     kwargs:

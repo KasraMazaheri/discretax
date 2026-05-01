@@ -3,3 +3,5 @@ defaults:
 
 dataset:
   name: Exchange
+trainer:
+  eval_every_steps: 25

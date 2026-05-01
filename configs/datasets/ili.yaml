@@ -6,3 +6,6 @@ dataset:
   params:
     seq_len: 36
     pred_len: 24
+trainer:
+  num_epochs: 50
+  eval_every_steps: 20

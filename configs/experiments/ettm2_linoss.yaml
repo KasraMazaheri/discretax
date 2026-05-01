@@ -9,9 +9,6 @@ description: LinOSS on the ETTm2 long-horizon multivariate forecasting task.
 tags:
   - linoss
   - ettm2
-loader:
-  batch_size: 4
-  eval_batch_size: 4
 model:
   backbone:
     kwargs:

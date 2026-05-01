@@ -8,3 +8,7 @@ dataset:
   params:
     loss_window: 720
     regression_loss: mse
+trainer:
+  num_epochs: 10
+  max_steps: 25000
+  eval_every_steps: 200

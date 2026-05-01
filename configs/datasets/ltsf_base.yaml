@@ -8,6 +8,10 @@ dataset:
     seq_len: 720
     pred_len: 720
     regression_loss: mse
+loader:
+  batch_size: 32
+  eval_batch_size: 32
 trainer:
-  num_epochs: null
-  max_steps: 30000
+  num_epochs: 10
+  max_steps: 25000
+  eval_every_steps: 200
