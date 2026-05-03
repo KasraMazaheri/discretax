@@ -151,12 +151,19 @@ def _load_single_job(
     return result, summary
 
 
-def load_job_results(sweep_dir: Path) -> tuple[list[dict[str, Any]], str, bool]:
-    """Load results from all jobs in a sweep's outputs directory."""
+def load_job_results(
+    sweep_dir: Path, rank_by: str = "test"
+) -> tuple[list[dict[str, Any]], str, bool, str]:
+    """Load results from all jobs in a sweep's outputs directory.
+
+    Returns (results, test_metric_key, higher_is_better, rank_metric_key).
+    `score` always reflects the test metric. `rank_score` reflects whichever metric
+    is selected for ranking (test or validation).
+    """
     outputs_dir = sweep_dir / "outputs"
     if not outputs_dir.exists():
         print(f"Warning: outputs directory not found at {outputs_dir}")
-        return [], "test_metric", True
+        return [], "test_metric", True, "test_metric"
 
     results: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
@@ -174,19 +181,34 @@ def load_job_results(sweep_dir: Path) -> tuple[list[dict[str, Any]], str, bool]:
         summaries.append(summary)
 
     metric_key, higher_is_better = _detect_metric(summaries)
+
+    if rank_by == "val":
+        # Validation metric loss-style: lower is better. (best_val_metric is the
+        # monitored value at the best checkpoint — orientation matches the test loss.)
+        rank_metric_key = "best_val_metric"
+    else:
+        rank_metric_key = metric_key
+
     for r, s in zip(results, summaries):
         v = s.get(metric_key)
         if v in (float("inf"), float("-inf")):
             v = float("nan")
         r["score"] = v
-    return results, metric_key, higher_is_better
+
+        rv = s.get(rank_metric_key)
+        if rv in (float("inf"), float("-inf")):
+            rv = float("nan")
+        r["rank_score"] = rv
+    return results, metric_key, higher_is_better, rank_metric_key
 
 
-def _config_columns(df: pd.DataFrame) -> list[str]:
+def _config_columns(df: pd.DataFrame, aggregate_seeds: bool = True) -> list[str]:
     """Identify flattened config columns that represent ML hyperparameters.
 
-    Excludes result columns, per-job infrastructure (paths, wandb metadata),
-    and seed columns so that runs differing only by seed collapse into one group.
+    Excludes result columns and per-job infrastructure (paths, wandb metadata).
+    When `aggregate_seeds=True`, also excludes seed columns so that runs differing
+    only by seed collapse into one group; when False, seed columns are kept so
+    every run is treated as unique.
     """
     result_cols = {
         "job_id",
@@ -197,6 +219,7 @@ def _config_columns(df: pd.DataFrame) -> list[str]:
         "test_mse",
         "test_mae",
         "score",
+        "rank_score",
         "best_val_metric",
         "final_step",
         "duration_seconds",
@@ -207,16 +230,22 @@ def _config_columns(df: pd.DataFrame) -> list[str]:
         "std_score",
         "min_score",
         "max_score",
+        "mean_rank_score",
+        "std_rank_score",
+        "min_rank_score",
+        "max_rank_score",
+        "rank_num_runs",
         "num_runs",
         "num_nan",
         "mean_parameter_count",
         "mean_train_eps",
         "mean_eval_eps",
+        "job_ids",
     }
     # Prefixes that are infrastructure/metadata, not hyperparameters
     excluded_prefixes = ("paths_", "wandb_", "name")
-    # Seed columns are nuisance variables — exclude from grouping
-    excluded_seed = {"seed", "trainer_seed", "dataset_seed"}
+    # Seed columns are nuisance variables — exclude from grouping unless requested
+    excluded_seed = {"seed", "trainer_seed", "dataset_seed"} if aggregate_seeds else set()
 
     return [
         col
@@ -224,7 +253,7 @@ def _config_columns(df: pd.DataFrame) -> list[str]:
         if col not in result_cols
         and not any(col.startswith(p) for p in excluded_prefixes)
         and col not in excluded_seed
-        and not col.endswith("_seed")
+        and not (aggregate_seeds and col.endswith("_seed"))
     ]
 
 
@@ -233,14 +262,24 @@ def _varying_columns(df: pd.DataFrame, config_cols: list[str]) -> list[str]:
     return [col for col in config_cols if col in df.columns and df[col].nunique(dropna=False) > 1]
 
 
-def group_by_config(df: pd.DataFrame) -> pd.DataFrame:
-    """Group results by configuration (excluding seed) and compute statistics."""
-    config_cols = _config_columns(df)
+def group_by_config(df: pd.DataFrame, aggregate_seeds: bool = True) -> pd.DataFrame:
+    """Group results by configuration and compute statistics.
+
+    With `aggregate_seeds=True` (default), runs differing only by seed collapse
+    into one row. With `aggregate_seeds=False`, the seed columns participate in
+    the group key so each run becomes its own group.
+    """
+    config_cols = _config_columns(df, aggregate_seeds=aggregate_seeds)
     if not config_cols:
         print("Warning: no config columns found — returning ungrouped data")
         return df
 
-    metric_cols = [c for c in ("score",) if c in df.columns]
+    # When the caller wants every run to be unique, include job_id in the group
+    # key so that re-runs sharing the same seed don't collapse together.
+    if not aggregate_seeds and "job_id" in df.columns and "job_id" not in config_cols:
+        config_cols = ["job_id", *config_cols]
+
+    metric_cols = [c for c in ("score", "rank_score") if c in df.columns]
     agg: dict[str, list[str]] = {
         col: ["mean", "std", "min", "max", "count"] for col in metric_cols
     }
@@ -266,12 +305,26 @@ def group_by_config(df: pd.DataFrame) -> pd.DataFrame:
     grouped.columns = ["_".join(col).strip() for col in grouped.columns]
     grouped = grouped.reset_index()
 
+    # Attach the sorted list of job IDs belonging to each group.
+    if "job_id" in df.columns:
+        job_ids = (
+            df.groupby(present_config_cols, dropna=False)["job_id"]
+            .apply(lambda s: sorted(int(v) for v in s.dropna().tolist()))
+            .reset_index(name="job_ids")
+        )
+        grouped = grouped.merge(job_ids, on=present_config_cols, how="left")
+
     renames = {
         "score_mean": "mean_score",
         "score_std": "std_score",
         "score_min": "min_score",
         "score_max": "max_score",
         "score_count": "num_runs",
+        "rank_score_mean": "mean_rank_score",
+        "rank_score_std": "std_rank_score",
+        "rank_score_min": "min_rank_score",
+        "rank_score_max": "max_rank_score",
+        "rank_score_count": "rank_num_runs",
         "parameter_count_mean": "mean_parameter_count",
         "median_train_examples_per_second_mean": "mean_train_eps",
         "median_eval_examples_per_second_mean": "mean_eval_eps",
@@ -296,7 +349,9 @@ def print_failed_runs(df: pd.DataFrame, metric_key: str) -> None:
             df_hashable[col] = df_hashable[col].apply(
                 lambda v: str(v) if isinstance(v, (list, dict)) else v
             )
-    varying = _varying_columns(df_hashable, _config_columns(df_hashable))
+    varying = _varying_columns(
+        df_hashable, _config_columns(df_hashable, aggregate_seeds=False)
+    )
     for _, row in failed.sort_values("job_id").iterrows():
         hp_str = "  ".join(f"{col}={row[col]}" for col in varying if col in row)
         raw_loss = row.get("test_loss")
@@ -330,23 +385,42 @@ def print_summary(df: pd.DataFrame, grouped_df: pd.DataFrame, metric_key: str) -
 
 
 def print_top_configs(
-    grouped_df: pd.DataFrame, metric_key: str, higher_is_better: bool, top_k: int = 10
+    grouped_df: pd.DataFrame,
+    metric_key: str,
+    higher_is_better: bool,
+    rank_metric_key: str,
+    top_k: int = 10,
+    aggregate_seeds: bool = True,
 ) -> None:
-    """Print the top-k configurations ranked by mean score."""
+    """Print the top-k configurations ranked by `rank_metric_key` (test or val).
+
+    Always reports the test metric (`mean_score`) alongside the ranking metric
+    (`mean_rank_score`).
+    """
     print("\n" + "=" * 80)
     direction = "higher is better" if higher_is_better else "lower is better"
-    print(f"TOP {top_k} CONFIGURATIONS  —  by mean {metric_key} ({direction})")
+    rank_label = (
+        f"mean {rank_metric_key}"
+        if rank_metric_key != metric_key
+        else f"mean {metric_key} ({direction})"
+    )
+    print(f"TOP {top_k} CONFIGURATIONS  —  ranked by {rank_label}; reporting test {metric_key}")
     print("=" * 80)
 
     if "mean_score" not in grouped_df.columns:
         print("No metric data available")
         return
 
+    sort_col = "mean_rank_score" if "mean_rank_score" in grouped_df.columns else "mean_score"
     df_sorted = grouped_df.sort_values(
-        "mean_score", ascending=not higher_is_better, na_position="last"
+        sort_col, ascending=not higher_is_better, na_position="last"
     )
-    varying = _varying_columns(grouped_df, _config_columns(grouped_df))
+    varying = _varying_columns(
+        grouped_df, _config_columns(grouped_df, aggregate_seeds=aggregate_seeds)
+    )
     print(f"\nVarying parameters: {', '.join(varying) or '(none)'}\n")
+
+    show_rank = sort_col == "mean_rank_score" and rank_metric_key != metric_key
 
     for rank, (_, row) in enumerate(df_sorted.head(top_k).iterrows(), 1):
         mean_score = row["mean_score"]
@@ -354,12 +428,24 @@ def print_top_configs(
         num_runs = int(row.get("num_runs", 0) or 0)
         std_str = f" ± {std_score:.4f}" if pd.notna(std_score) else ""
         mean_str = f"{mean_score:.4f}" if pd.notna(mean_score) else "   nan"
+        rank_str = ""
+        if show_rank:
+            rv = row.get("mean_rank_score")
+            rs = row.get("std_rank_score")
+            rv_s = f"{rv:.4f}" if pd.notna(rv) else "  nan"
+            rs_s = f" ± {rs:.4f}" if pd.notna(rs) else ""
+            rank_str = f"  [val={rv_s}{rs_s}]"
         hp_str = "  ".join(f"{col}={row[col]}" for col in varying if col in row)
-        print(f"{rank:3d}. {mean_str}{std_str} (n={num_runs})  {hp_str}")
+        ids = row.get("job_ids") if "job_ids" in row else None
+        ids_str = f"  jobs={list(ids)}" if isinstance(ids, list) else ""
+        print(f"{rank:3d}. test={mean_str}{std_str}{rank_str} (n={num_runs})  {hp_str}{ids_str}")
 
 
 def analyze_parameter_impact(
-    grouped_df: pd.DataFrame, metric_key: str, higher_is_better: bool
+    grouped_df: pd.DataFrame,
+    metric_key: str,
+    higher_is_better: bool,
+    aggregate_seeds: bool = True,
 ) -> None:
     """Print per-parameter score breakdowns for all varying hyperparameters."""
     print("\n" + "=" * 80)
@@ -370,7 +456,7 @@ def analyze_parameter_impact(
         print("No metric data available")
         return
 
-    config_cols = _config_columns(grouped_df)
+    config_cols = _config_columns(grouped_df, aggregate_seeds=aggregate_seeds)
     varying = _varying_columns(grouped_df, config_cols)
     if not varying:
         print("No varying hyperparameters found")
@@ -385,7 +471,9 @@ def analyze_parameter_impact(
         print()
 
 
-def print_efficiency_comparison(grouped_df: pd.DataFrame) -> None:
+def print_efficiency_comparison(
+    grouped_df: pd.DataFrame, aggregate_seeds: bool = True
+) -> None:
     """Print parameter count and throughput side-by-side, sorted by param count."""
     has_params = (
         "mean_parameter_count" in grouped_df.columns
@@ -405,7 +493,9 @@ def print_efficiency_comparison(grouped_df: pd.DataFrame) -> None:
     print("EFFICIENCY COMPARISON  (sorted by parameter count)")
     print("=" * 80)
 
-    varying = _varying_columns(grouped_df, _config_columns(grouped_df))
+    varying = _varying_columns(
+        grouped_df, _config_columns(grouped_df, aggregate_seeds=aggregate_seeds)
+    )
     df = grouped_df.copy()
     if has_params:
         df = df.sort_values("mean_parameter_count", ascending=True)
@@ -453,11 +543,28 @@ def main() -> None:
         help="Save all individual run results to a CSV file",
     )
     parser.add_argument(
-        "--no-analysis",
+        "--efficiency",
         action="store_true",
-        help="Skip per-parameter impact analysis",
+        help="Do efficiency analysis",
+    )
+    parser.add_argument(
+        "--analysis",
+        action="store_true",
+        help="Do per-parameter impact analysis",
+    )
+    parser.add_argument(
+        "--rank-by",
+        choices=("test", "val"),
+        default="test",
+        help="Metric to rank configurations by (default: test). Test metric is always reported.",
+    )
+    parser.add_argument(
+        "--no-aggregate",
+        action="store_true",
+        help="Treat each run as unique (no averaging over seeds or duplicate jobs).",
     )
     args = parser.parse_args()
+    aggregate_seeds = not args.no_aggregate
 
     sweep_dir = Path(args.sweep_dir)
     if not sweep_dir.exists():
@@ -465,22 +572,39 @@ def main() -> None:
         return
 
     print(f"Loading results from {sweep_dir} ...")
-    results, metric_key, higher_is_better = load_job_results(sweep_dir)
+    results, metric_key, higher_is_better, rank_metric_key = load_job_results(
+        sweep_dir, rank_by=args.rank_by
+    )
     if not results:
         print("No completed results found.")
         return
-    print(f"Ranking by '{metric_key}' ({'higher' if higher_is_better else 'lower'} is better)")
+    print(
+        f"Reporting test metric '{metric_key}'  |  ranking by '{rank_metric_key}' "
+        f"({'higher' if higher_is_better else 'lower'} is better)  |  "
+        f"aggregate={aggregate_seeds}"
+    )
 
     df = pd.DataFrame(results)
-    grouped_df = group_by_config(df)
+    grouped_df = group_by_config(df, aggregate_seeds=aggregate_seeds)
 
     print_summary(df, grouped_df, metric_key)
     print_failed_runs(df, metric_key)
-    print_top_configs(grouped_df, metric_key, higher_is_better, top_k=args.top_k)
-    print_efficiency_comparison(grouped_df)
+    print_top_configs(
+        grouped_df,
+        metric_key,
+        higher_is_better,
+        rank_metric_key,
+        top_k=args.top_k,
+        aggregate_seeds=aggregate_seeds,
+    )
 
-    if not args.no_analysis:
-        analyze_parameter_impact(grouped_df, metric_key, higher_is_better)
+    if args.efficiency:
+        print_efficiency_comparison(grouped_df, aggregate_seeds=aggregate_seeds)
+
+    if args.analysis:
+        analyze_parameter_impact(
+            grouped_df, metric_key, higher_is_better, aggregate_seeds=aggregate_seeds
+        )
 
     if args.output:
         out = Path(args.output)

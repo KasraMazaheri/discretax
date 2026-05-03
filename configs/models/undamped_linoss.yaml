@@ -1,0 +1,29 @@
+model:
+  name: linoss
+  hidden_dim: 128
+  encoder:
+    target: LinearEncoder
+    kwargs:
+      use_bias: false
+  backbone:
+    target: LinOSS
+    kwargs:
+      num_blocks: 4
+      state_dim: 128
+      num_heads: 1
+      use_head_gating: false
+      use_head_output_projection: false
+      drop_rate: 0.1
+      prenorm: true
+      discretization: IM
+      initialization: AG
+      damping: false
+      stability: oscillatory
+      A_max: 1.0
+      G_max: 0.2
+      projection_eps: 0.001
+      input_normalization: false
+  head:
+    target: ClassificationHead
+    kwargs:
+      reduce: true

@@ -5,3 +5,4 @@ dataset:
   name: ETTh2
 trainer:
   eval_every_steps: 50
+  log_every_steps: 25

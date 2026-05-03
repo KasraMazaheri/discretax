@@ -1,0 +1,27 @@
+defaults:
+  - ../base
+  - ../datasets/etth2
+  - ../models/undamped_linoss
+
+name: linoss-etth2
+seed: 0
+description: LinOSS on the ETTh2 long-horizon multivariate forecasting task.
+tags:
+  - linoss
+  - etth2
+model:
+  head:
+    target: RegressionHead
+    kwargs:
+      reduce: false
+      output_step: 1
+wandb:
+  enabled: true
+  mode: online
+  project: discretax-linoss-etth2
+  job_type: train
+  tags:
+    - LinOSS
+    - ETTh2
+    - regression
+    - online

@@ -15,3 +15,4 @@ trainer:
   num_epochs: 10
   max_steps: 25000
   eval_every_steps: 200
+  log_every_steps: 50
