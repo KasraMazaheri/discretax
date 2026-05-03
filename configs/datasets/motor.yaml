@@ -1,8 +1,8 @@
+defaults:
+  - ./uea_base
+
 dataset:
-  kind: uea
   name: MotorImagery
-  root: processed/UEA
-  download: false
-  normalize: false
-  params:
-    include_time: false
+trainer:
+  eval_every_steps: 40
+  log_every_steps: 8
