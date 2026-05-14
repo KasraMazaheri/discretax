@@ -63,18 +63,23 @@ def build_model(
     backbone_config = _with_dtype(experiment_config.model.backbone, compute_dtype)
     head_config = _with_dtype(experiment_config.model.head, compute_dtype)
 
-    encoder = _build_partial(encoder_config).resolve(
-        in_features=dataset_bundle.input_dim,
-        out_features=experiment_config.model.hidden_dim,
-        key=encoder_key,
-    )
+    encoder_kwargs = {
+        "in_features": dataset_bundle.input_dim,
+        "out_features": experiment_config.model.hidden_dim,
+        "key": encoder_key,
+    }
+    image_shape = dataset_bundle.metadata.get("image_shape")
+    if image_shape is not None:
+        encoder_kwargs["image_shape"] = tuple(image_shape)
+        encoder_kwargs["sequence_layout"] = dataset_bundle.metadata.get("sequence_layout", "rows")
+    encoder = _build_partial(encoder_config).resolve(**encoder_kwargs)
     backbone = _build_partial(backbone_config).resolve(
         hidden_dim=experiment_config.model.hidden_dim,
         key=backbone_key,
     )
     head = _build_partial(head_config).resolve(
         in_features=experiment_config.model.hidden_dim,
-        out_features=dataset_bundle.num_classes,
+        out_features=dataset_bundle.output_dim,
         key=head_key,
     )
     return eqx.nn.Sequential([encoder, backbone, head])

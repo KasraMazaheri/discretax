@@ -1,0 +1,29 @@
+defaults:
+  - ../base
+  - ../datasets/exchange
+  - ../models/linoss
+
+name: linoss-exchange
+seed: 0
+description: LinOSS on the Exchange-Rate long-horizon multivariate forecasting task.
+tags:
+  - linoss
+  - exchange
+model:
+  backbone:
+    kwargs:
+      A_max: 4.0
+      G_max: 3.0
+  head:
+    target: RegressionHead
+    kwargs:
+      reduce: false
+      output_step: 1
+wandb:
+  enabled: false
+  project: discretax-linoss-ltsf
+  job_type: train
+  tags:
+    - LinOSS
+    - Exchange
+    - regression

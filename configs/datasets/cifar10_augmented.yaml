@@ -1,0 +1,12 @@
+defaults:
+  - ./cifar10
+
+dataset:
+  normalize: true
+  params:
+    normalization: cifar10_channelwise
+    augmentations:
+      random_crop:
+        padding: 4
+      horizontal_flip:
+        prob: 0.5

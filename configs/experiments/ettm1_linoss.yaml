@@ -1,0 +1,29 @@
+defaults:
+  - ../base
+  - ../datasets/ettm1
+  - ../models/linoss
+
+name: linoss-ettm1
+seed: 0
+description: LinOSS on the ETTm1 long-horizon multivariate forecasting task.
+tags:
+  - linoss
+  - ettm1
+model:
+  backbone:
+    kwargs:
+      A_max: 8.0
+      G_max: 0.05
+  head:
+    target: RegressionHead
+    kwargs:
+      reduce: false
+      output_step: 1
+wandb:
+  enabled: false
+  project: discretax-linoss-ltsf
+  job_type: train
+  tags:
+    - LinOSS
+    - ETTm1
+    - regression

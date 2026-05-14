@@ -22,8 +22,14 @@ loader:
 optimizer:
   name: adamw
   learning_rate: 0.001
+  weight_decay_mask: exclude_1d_params
   schedule:
     name: constant
+regularization:
+  label_smoothing: 0.1
+ema:
+  enabled: true
+  decay: 0.999
 trainer:
   num_epochs: 5
 precision:
@@ -86,10 +92,15 @@ wandb:
     assert config.loader.batch_size == 16
     assert config.trainer.max_steps == 7
     assert config.optimizer.learning_rate == 0.01
+    assert config.optimizer.weight_decay_mask == "exclude_1d_params"
+    assert config.regularization.label_smoothing == 0.1
+    assert config.ema.enabled is True
     assert config.precision.mode == "float32"
 
     flattened = flatten_config(config)
     assert flattened["dataset.kind"] == "uea"
     assert flattened["trainer.max_steps"] == 7
+    assert flattened["regularization.label_smoothing"] == 0.1
+    assert flattened["ema.enabled"] is True
     assert flattened["precision.mode"] == "float32"
     assert flattened["wandb.tags"] == ["ci"]

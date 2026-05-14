@@ -2,10 +2,12 @@
 
 from discretax.encoder.base import AbstractEncoder
 from discretax.encoder.embedding import EmbeddingEncoder
+from discretax.encoder.image_patch import ImagePatchEncoder
 from discretax.encoder.linear import LinearEncoder
 
 __all__ = [
     "AbstractEncoder",
     "LinearEncoder",
     "EmbeddingEncoder",
+    "ImagePatchEncoder",
 ]

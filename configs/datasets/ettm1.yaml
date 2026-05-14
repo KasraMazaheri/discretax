@@ -1,0 +1,8 @@
+defaults:
+  - ./ltsf_base
+
+dataset:
+  name: ETTm1
+  params:
+    seq_len: 672
+    pred_len: 672

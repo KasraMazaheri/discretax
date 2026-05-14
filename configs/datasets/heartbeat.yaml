@@ -1,0 +1,8 @@
+defaults:
+  - ./uea_base
+
+dataset:
+  name: Heartbeat
+trainer:
+  eval_every_steps: 30
+  log_every_steps: 6

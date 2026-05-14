@@ -1,0 +1,26 @@
+# sweep.sub
+# HTCondor submit file template for discretax hyperparameter sweeps.
+# $(SWEEP_NAME) and $(JOB_IDS) are substituted by generate_sweep.py / submit_chunk.py.
+# Uses itemdata queuing so $(JOB_ID) maps directly to the config file index,
+# making it safe to submit arbitrary subsets of a sweep.
+
+executable = cluster/run_job.sh
+arguments  = $(SWEEP_NAME) $(JOB_ID)
+
+getenv      = True
+environment = "HYDRA_FULL_ERROR=1"
+
+request_memory = 64000
+request_cpus   = 4
+request_gpus   = 1
+requirements = TARGET.CUDAGlobalMemoryMb > 32000
+
+log    = sweeps/$(SWEEP_NAME)/logs/job_$(ClusterId)_$(JOB_ID).log
+output = sweeps/$(SWEEP_NAME)/logs/job_$(ClusterId)_$(JOB_ID).out
+error  = sweeps/$(SWEEP_NAME)/logs/job_$(ClusterId)_$(JOB_ID).err
+
+# 24-hour wall time limit
+MaxTime         = 86400
+periodic_remove = (JobStatus =?= 2) && ((CurrentTime - JobCurrentStartDate) >= $(MaxTime))
+
+queue JOB_ID in ($(JOB_IDS))

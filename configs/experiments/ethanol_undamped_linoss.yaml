@@ -1,0 +1,27 @@
+defaults:
+  - ../base
+  - ../datasets/ethanol
+  - ../models/linoss
+
+name: linoss-uea-ethanol-undamped
+description: Base LinOSS experiment on the UEA EthanolConcentration classification dataset.
+tags:
+  - linoss
+  - uea
+  - ethanol
+model:
+  backbone:
+    kwargs:
+      discretization: IM
+      damping: false
+wandb:
+  enabled: true
+  mode: online
+  project: discretax-uea-ethanol
+  job_type: train
+  tags:
+    - linoss
+    - uea
+    - ethanol
+    - classification
+    - online

@@ -1,0 +1,36 @@
+defaults:
+  - ../base
+  - ../datasets/ppg
+  - ../models/linoss
+
+name: linoss-ppg
+seed: 0
+description: Base LinOSS experiment on the PPG-DaLiA regression dataset.
+tags:
+  - linoss
+  - ppg
+loader:
+  batch_size: 4
+  eval_batch_size: 4
+model:
+  backbone:
+    kwargs:
+      A_max: 1.0
+      G_max: 0.3
+  head:
+    target: RegressionHead
+    kwargs:
+      reduce: false
+      output_step: 128
+trainer:
+  num_epochs: 100
+wandb:
+  enabled: true
+  mode: online
+  project: discretax-linoss-ppg
+  job_type: train
+  tags:
+    - LinOSS
+    - PPG
+    - regression
+    - online

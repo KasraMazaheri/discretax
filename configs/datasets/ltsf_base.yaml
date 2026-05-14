@@ -1,0 +1,18 @@
+dataset:
+  kind: ltsf
+  root: LTSF
+  download: false
+  sequence_layout: time_major
+  normalize: false
+  params:
+    seq_len: 720
+    pred_len: 720
+    regression_loss: mse
+loader:
+  batch_size: 32
+  eval_batch_size: 32
+trainer:
+  num_epochs: 10
+  max_steps: 25000
+  eval_every_steps: 200
+  log_every_steps: 50

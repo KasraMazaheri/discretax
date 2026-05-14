@@ -7,11 +7,15 @@ authors = [
     { name = "Francesco Maria Ruscio", email = "fruscio@aithyra.at" },
     { name = "Philipp Nazari", email = "philipp.nazari@tuebingen.mpg.de" },
     { name = "Benedict Armstrong", email = "benedict.armstrong@inf.ethz.ch" },
+    { name = "Kasra Mazaheri", email = "Kasra.Mazaherii@gmail.com" },
+    { name = "Jared Boyer", email = "jaredb@mit.edu" },
 ]
 maintainers = [
     { name = "Francesco Maria Ruscio" },
     { name = "Philipp Nazari" },
     { name = "Benedict Armstrong" },
+    { name = "Kasra Mazaheri" },
+    { name = "Jared Boyer" },
 ]
 license = "MIT"
 license-files = ["LICEN[CS]E.*"]

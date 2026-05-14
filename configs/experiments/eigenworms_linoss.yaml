@@ -1,0 +1,22 @@
+defaults:
+  - ../base
+  - ../datasets/eigenworms
+  - ../models/linoss
+
+name: linoss-uea-eigenworms
+description: Base LinOSS experiment on the UEA EigenWorms classification dataset.
+tags:
+  - linoss
+  - uea
+  - eigenworms
+wandb:
+  enabled: true
+  mode: online
+  project: discretax-uea-eigenworms
+  job_type: train
+  tags:
+    - linoss
+    - uea
+    - eigenworms
+    - classification
+    - online

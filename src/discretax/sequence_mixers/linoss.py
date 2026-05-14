@@ -62,6 +62,21 @@ MATRIX_FNS = {
 }
 
 
+def _lambda_sq(discretization: str, A, G, step):
+    """|λ|² = det(M); product of eigenvalues for the 2×2 block."""
+    m11, m12, m21, m22, _, _ = MATRIX_FNS[discretization](A, G, step)
+    return m11 * m22 - m12 * m21
+
+
+def _init_gamma_log(discretization, stability, A_flat, G_flat, steps_flat, projection_eps, dtype):
+    """Initialize per-mode log-gain to sqrt(1 - |λ|²) using post-projection (A, G)."""
+    h_init = nn.sigmoid(steps_flat)
+    proj = _project_ag_oscillatory if stability == "oscillatory" else _project_ag_stability
+    A_proj, G_proj = proj(discretization, A_flat, G_flat, h_init, projection_eps)
+    lam_sq = _lambda_sq(discretization, A_proj, G_proj, h_init)
+    return (0.5 * jnp.log(jnp.clip(1.0 - lam_sq, 1e-6, None))).astype(dtype)
+
+
 # --- Symbolic Inverse ----------------------------------
 
 
@@ -100,6 +115,7 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
     C: jax.Array
     D: jax.Array
     steps: jax.Array
+    gamma_log: jax.Array
     head_gate: eqx.nn.Linear | None
     head_output_projection: eqx.nn.Linear | None
 
@@ -108,6 +124,8 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
     initialization: Literal["RT", "AG"] = eqx.field(static=True)
     damping: bool = eqx.field(static=True)
     stability: Literal["oscillatory", "stable"] = eqx.field(static=True)
+    projection_eps: float = eqx.field(static=True)
+    input_normalization: bool = eqx.field(static=True)
     num_heads: int = eqx.field(static=True)
     head_hidden_dim: int = eqx.field(static=True)
     head_state_dim: int = eqx.field(static=True)
@@ -121,11 +139,13 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
         *args,
         state_dim: int = 64,
         discretization: Literal["IM", "IMEX", "IMEX2", "IMEX3", "EX"] = "IMEX",
-        initialization: Literal["RT", "AG"] = "RT",
+        initialization: Literal["RT", "AG"] = "AG",
         damping: bool = True,
-        stability: Literal["oscillatory", "stable"] = "stable",
+        stability: Literal["oscillatory", "stable"] = "oscillatory",
+        projection_eps: float = 0.0,
+        input_normalization: bool = False,
         r_min: float = 0.9,
-        theta_max: float = jnp.pi,
+        theta_max: float = jnp.pi / 4,
         num_heads: int = 1,
         use_head_gating: bool = False,
         use_head_output_projection: bool = False,
@@ -145,6 +165,11 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
             damping: whether to use damping.
             stability: "oscillatory" (complex conjugate eigenvalues)
                        or "stable" (full Jury region).
+            projection_eps: epsilon buffer inset from eigenvalue stability boundaries.
+                A_high is scaled by (1 - eps) and A_low (where non-negative) by (1 + eps).
+                0.0 disables the buffer.
+            input_normalization: LRU-style per-mode input gain initialized to
+                sqrt(1 - |λ|²) for unit steady-state variance at init. Damped only.
             r_min: minimum value for the radius.
             theta_max: maximum value for the theta parameter.
             num_heads: number of independent LinOSS heads.
@@ -166,12 +191,14 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
             )
         if state_dim % num_heads != 0:
             raise ValueError(f"state_dim={state_dim} must be divisible by num_heads={num_heads}")
+        if input_normalization and not damping:
+            raise ValueError("input_normalization requires damping=True (|λ|=1 → gamma=0).")
 
         self.num_heads = num_heads
         self.head_hidden_dim = in_features // num_heads
         self.head_state_dim = state_dim // num_heads
         self.use_head_gating = use_head_gating and num_heads > 1
-        self.use_head_output_projection = use_head_output_projection and num_heads > 1
+        self.use_head_output_projection = use_head_output_projection
 
         # Key generator
         def key_gen(key: PRNGKeyArray):
@@ -213,6 +240,16 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
             dtype=dtype,
         )
         self.D = normal(stddev=1.0)(nxt(), (num_heads, self.head_hidden_dim), dtype=dtype)
+
+        gamma_log_flat = (
+            _init_gamma_log(
+                discretization, stability, A_flat, G_flat, steps_flat, projection_eps, dtype
+            )
+            if input_normalization
+            else jnp.zeros((state_dim,), dtype=dtype)
+        )
+        self.gamma_log = gamma_log_flat.reshape(num_heads, self.head_state_dim)
+
         self.head_gate = (
             eqx.nn.Linear(in_features, num_heads, key=nxt(), dtype=dtype)
             if self.use_head_gating
@@ -228,6 +265,8 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
         self.initialization = initialization
         self.damping = damping
         self.stability = stability
+        self.projection_eps = projection_eps
+        self.input_normalization = input_normalization
 
     def __call__(self, x: Array, key: PRNGKeyArray) -> Array:
         """Forward pass of the LinOSS sequence mixer layer.
@@ -247,7 +286,9 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
         G_diag = self.G_diag if self.damping else jnp.zeros_like(self.G_diag)
         x_heads = x.reshape(x.shape[0], self.num_heads, self.head_hidden_dim)
         scan_inputs = jnp.swapaxes(x_heads, 0, 1)
-        ys = jax.vmap(self._apply_recurrence)(self.A_diag, G_diag, self.B, scan_inputs, steps)
+        ys = jax.vmap(self._apply_recurrence)(
+            self.A_diag, G_diag, self.B, scan_inputs, steps, self.gamma_log
+        )
         ys = jnp.swapaxes(ys, 0, 1)  # (L, num_heads, head_state_dim) complex
 
         C_complex = self.C[..., 0] + 1j * self.C[..., 1]
@@ -271,15 +312,20 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
         B: Array,
         x: Array,
         steps: Array,
+        gamma_log: Array,
     ) -> Array:
         """Apply one head's LinOSS recurrence. Returns (L, head_state_dim) complex."""
         if self.stability == "oscillatory":
-            A, G = _project_ag_oscillatory(self.discretization, A_diag, G_diag, steps)
+            A, G = _project_ag_oscillatory(
+                self.discretization, A_diag, G_diag, steps, self.projection_eps
+            )
         else:
-            A, G = _project_ag_stability(self.discretization, A_diag, G_diag, steps)
+            A, G = _project_ag_stability(
+                self.discretization, A_diag, G_diag, steps, self.projection_eps
+            )
         mat_fn = MATRIX_FNS[self.discretization]
         B_complex = B[..., 0] + 1j * B[..., 1]
-        return _apply_linoss(mat_fn, A, G, B_complex, x, steps)
+        return _apply_linoss(mat_fn, A, G, B_complex, x, steps, gamma_log)
 
 
 # --- Initialization Helpers ----------------------------------
@@ -421,7 +467,7 @@ def _init_damped_linoss_rt(
 # --- Projection Operations ----------------------------------
 
 
-def _project_ag_oscillatory(discretization, A_diag, G_diag, steps):
+def _project_ag_oscillatory(discretization, A_diag, G_diag, steps, eps=0.0):
     """Project A, G into the oscillator parameter space given the discretization.
 
     Args:
@@ -429,6 +475,8 @@ def _project_ag_oscillatory(discretization, A_diag, G_diag, steps):
         A_diag: un-projected A_diag parameters.
         G_diag: un-projected G_diag parameters.
         steps: pre-activated (e.g. sigmoid) timesteps.
+        eps: epsilon buffer inset from stability boundaries. A_high is scaled by
+            (1 - eps); A_low (where non-negative) is scaled by (1 + eps).
 
     Returns:
         Projected (A_diag, G_diag)
@@ -444,26 +492,26 @@ def _project_ag_oscillatory(discretization, A_diag, G_diag, steps):
         G_diag = nn.relu(G_diag)
         A_low = (2 + h * G_diag - 2 * jnp.sqrt(1 + h * G_diag)) / h2
         A_high = (2 + h * G_diag + 2 * jnp.sqrt(1 + h * G_diag)) / h2
-        A_diag = jnp.clip(A_diag, A_low, A_high)
+        A_diag = jnp.clip(A_diag, A_low * (1 + eps), A_high * (1 - eps))
     elif discretization == "IMEX2":
-        G_diag = jnp.clip(G_diag, 0.0, 1 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (1 / h) * (1 - eps))
         A_low = (2 - h * G_diag - 2 * jnp.sqrt(1 - h * G_diag)) / h2
         A_high = (2 - h * G_diag + 2 * jnp.sqrt(1 - h * G_diag)) / h2
-        A_diag = jnp.clip(A_diag, A_low, A_high)
+        A_diag = jnp.clip(A_diag, A_low * (1 + eps), A_high * (1 - eps))
     elif discretization == "IMEX3":
-        G_diag = jnp.clip(G_diag, 0.0, 1 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (1 / h) * (1 - eps))
         A_low = G_diag**2 / jnp.maximum(4 * (1 - h * G_diag), 1e-6)
-        A_diag = A_low + nn.relu(A_diag - A_low)
+        A_diag = A_low * (1 + eps) + nn.relu(A_diag - A_low * (1 + eps))
     elif discretization == "EX":
-        G_diag = jnp.clip(G_diag, 0.0, 4 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (4 / h) * (1 - eps))
         A_low = 1 / 4 * G_diag**2
         A_high = G_diag / h
-        A_diag = jnp.clip(A_diag, A_low, A_high)
+        A_diag = jnp.clip(A_diag, A_low * (1 + eps), A_high * (1 - eps))
 
     return A_diag, G_diag
 
 
-def _project_ag_stability(discretization, A_diag, G_diag, steps):
+def _project_ag_stability(discretization, A_diag, G_diag, steps, eps=0.0):
     """Project A, G into the stable parameter space given the discretization.
 
     Args:
@@ -471,6 +519,8 @@ def _project_ag_stability(discretization, A_diag, G_diag, steps):
         A_diag: un-projected A_diag parameters.
         G_diag: un-projected G_diag parameters.
         steps: pre-activated (e.g. sigmoid) timesteps.
+        eps: epsilon buffer inset from stability boundaries. A_high is scaled by
+            (1 - eps); A_low (where non-negative) is scaled by (1 + eps).
 
     Returns:
         Projected (A_diag, G_diag)
@@ -485,20 +535,20 @@ def _project_ag_stability(discretization, A_diag, G_diag, steps):
     elif discretization == "IMEX":
         G_diag = nn.relu(G_diag)
         A_high = (4 + 2 * h * G_diag) / h2
-        A_diag = jnp.clip(A_diag, 0.0, A_high)
+        A_diag = jnp.clip(A_diag, 0.0, A_high * (1 - eps))
     elif discretization == "IMEX2":
-        G_diag = jnp.clip(G_diag, 0.0, 2 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (2 / h) * (1 - eps))
         A_high = (4 - 2 * h * G_diag) / h2
-        A_diag = jnp.clip(A_diag, 0.0, A_high)
+        A_diag = jnp.clip(A_diag, 0.0, A_high * (1 - eps))
     elif discretization == "IMEX3":
         A_low_1 = (2 * h * G_diag - 4) / h2
         A_low_2 = -G_diag / h
         A_diag = jnp.maximum(jnp.maximum(jnp.maximum(A_diag, A_low_1), A_low_2), 0.0)
     elif discretization == "EX":
-        G_diag = jnp.clip(G_diag, 0.0, 4 / h)
+        G_diag = jnp.clip(G_diag, 0.0, (4 / h) * (1 - eps))
         A_low = nn.relu((2 * h * G_diag - 4) / h2)
         A_high = G_diag / h
-        A_diag = jnp.clip(A_diag, A_low, A_high)
+        A_diag = jnp.clip(A_diag, A_low * (1 + eps), A_high * (1 - eps))
 
     return A_diag, G_diag
 
@@ -557,7 +607,7 @@ def _apply_linoss_scan(
     return xs[:, state_dim:]
 
 
-def _apply_linoss(mat_fn, A, G, B_complex, x, step):
+def _apply_linoss(mat_fn, A, G, B_complex, x, step, gamma_log):
     """Unified LinOSS apply using a matrix function from MATRIX_FNS.
 
     Args:
@@ -567,11 +617,13 @@ def _apply_linoss(mat_fn, A, G, B_complex, x, step):
         B_complex: Input matrix.
         x: Input sequence of features.
         step: Pre-activated discretization time-steps.
+        gamma_log: Per-mode log input gain, shape (state_dim,). Zeros = no-op.
 
     Returns:
         Hidden state sequence of shape (L, state_dim), complex.
     """
     Bu = jax.vmap(lambda u: B_complex @ u)(x)
+    Bu = Bu * jnp.exp(gamma_log)[None, :]
 
     M_11, M_12, M_21, M_22, f1, f2 = mat_fn(A, G, step)
     F1 = Bu * f1[None, :]

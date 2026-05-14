@@ -1,0 +1,11 @@
+defaults:
+  - ./ltsf_base
+
+dataset:
+  name: Weather
+  params:
+    csv_path: weather.csv
+    seq_len: 720
+    pred_len: 720
+trainer:
+  eval_every_steps: 200

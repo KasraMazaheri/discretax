@@ -1,0 +1,27 @@
+defaults:
+  - ../base
+  - ../datasets/heartbeat
+  - ../models/linoss
+
+name: linoss-uea-heartbeat-undamped
+description: Base LinOSS experiment on the UEA Heartbeat classification dataset.
+tags:
+  - linoss
+  - uea
+  - heartbeat
+model:
+  backbone:
+    kwargs:
+      discretization: IM
+      damping: false
+wandb:
+  enabled: true
+  mode: online
+  project: discretax-uea-heartbeat
+  job_type: train
+  tags:
+    - linoss
+    - uea
+    - heartbeat
+    - classification
+    - online

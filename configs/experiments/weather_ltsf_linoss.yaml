@@ -1,0 +1,32 @@
+defaults:
+  - ../base
+  - ../datasets/weather_ltsf
+  - ../models/linoss
+
+name: linoss-weather-ltsf
+seed: 0
+description: LinOSS on the Weather long-horizon multivariate forecasting task via the generic LTSF CSV pipeline.
+tags:
+  - linoss
+  - weather
+  - ltsf
+model:
+  backbone:
+    kwargs:
+      A_max: 4.0
+      G_max: 3.0
+  head:
+    target: RegressionHead
+    kwargs:
+      reduce: false
+      output_step: 1
+wandb:
+  enabled: true
+  mode: online
+  project: discretax
+  job_type: train
+  tags:
+    - LinOSS
+    - Weather
+    - regression
+    - ltsf

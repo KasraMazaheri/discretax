@@ -1,0 +1,9 @@
+dataset:
+  kind: uea
+  root: processed/UEA
+  download: false
+  normalize: false
+  params:
+    include_time: false
+trainer:
+  num_epochs: 1000

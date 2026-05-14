@@ -1,0 +1,27 @@
+defaults:
+  - ../base
+  - ../datasets/scp2
+  - ../models/linoss
+
+name: linoss-uea-scp2-undamped
+description: Base LinOSS experiment on the UEA SelfRegulationSCP2 classification dataset.
+tags:
+  - linoss
+  - uea
+  - scp2
+model:
+  backbone:
+    kwargs:
+      discretization: IM
+      damping: false
+wandb:
+  enabled: true
+  mode: online
+  project: discretax-uea-scp2
+  job_type: train
+  tags:
+    - linoss
+    - uea
+    - scp2
+    - classification
+    - online

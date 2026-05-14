@@ -1,0 +1,27 @@
+defaults:
+  - ../base
+  - ../datasets/motor
+  - ../models/linoss
+
+name: linoss-uea-motor-undamped
+description: Base LinOSS experiment on the UEA MotorImagery classification dataset.
+tags:
+  - linoss
+  - uea
+  - motor
+model:
+  backbone:
+    kwargs:
+      discretization: IM
+      damping: false
+wandb:
+  enabled: true
+  mode: online
+  project: discretax-uea-motor
+  job_type: train
+  tags:
+    - linoss
+    - uea
+    - motor
+    - classification
+    - online

@@ -59,11 +59,13 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
         use_head_gating: bool = False,
         use_head_output_projection: bool = False,
         discretization: Literal["IM", "IMEX", "IMEX2", "IMEX3", "EX"] = "IMEX",
-        initialization: Literal["RT", "AG"] = "RT",
+        initialization: Literal["RT", "AG"] = "AG",
         damping: bool = True,
-        stability: Literal["oscillatory", "stable"] = "stable",
+        stability: Literal["oscillatory", "stable"] = "oscillatory",
+        projection_eps: float = 0.0,
+        input_normalization: bool = False,
         r_min: float = 0.9,
-        theta_max: float = jnp.pi,
+        theta_max: float = jnp.pi / 4,
         A_max: float = 1.0,
         G_max: float = 1.0,
         drop_rate: float = 0.1,
@@ -88,6 +90,10 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
             damping: whether to use damping in LinOSS.
             stability: "oscillatory" (complex conjugate eigenvalues)
                        or "stable" (full Jury region).
+            projection_eps: epsilon buffer inset from eigenvalue stability boundaries.
+                A_high is scaled by (1 - eps) and A_low (where non-negative) by (1 + eps).
+                0.0 disables the buffer.
+            input_normalization: LRU-style per-mode input gain init. Damped only.
             r_min: minimum value for the radius in LinOSS.
             theta_max: maximum value for theta parameter in LinOSS.
             A_max: upper bound for A in AG initialization.
@@ -124,6 +130,8 @@ class LinOSS(eqx.nn.StatefulLayer, PartialModule):
                 initialization=initialization,
                 damping=damping,
                 stability=stability,
+                projection_eps=projection_eps,
+                input_normalization=input_normalization,
                 r_min=r_min,
                 theta_max=theta_max,
                 A_max=A_max,

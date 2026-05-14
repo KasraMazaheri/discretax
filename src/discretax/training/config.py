@@ -239,7 +239,9 @@ class OptimizerConfig:
 
     name: str = "adamw"
     learning_rate: float = 3e-4
+    eps: float = 1e-8
     weight_decay: float = 0.0
+    weight_decay_mask: str = "all"
     grad_clip_norm: float | None = None
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
 
@@ -250,8 +252,52 @@ class OptimizerConfig:
             raise ValueError(f"optimizer.name must be one of {sorted(supported)}")
         if self.learning_rate <= 0:
             raise ValueError("optimizer.learning_rate must be positive")
+        if self.eps <= 0:
+            raise ValueError("optimizer.eps must be positive")
+        supported_masks = {"all", "exclude_1d_params"}
+        if self.weight_decay_mask not in supported_masks:
+            raise ValueError(
+                f"optimizer.weight_decay_mask must be one of {sorted(supported_masks)}"
+            )
         if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
             raise ValueError("optimizer.grad_clip_norm must be positive when provided")
+
+
+@dataclass(slots=True)
+class RegularizationConfig:
+    """Training-time classification regularization configuration."""
+
+    label_smoothing: float = 0.0
+    mix_augmentation_prob: float = 0.0
+    mixup_alpha: float = 0.0
+    cutmix_alpha: float = 0.0
+    cutmix_switch_prob: float = 0.5
+
+    def __post_init__(self) -> None:
+        """Validate regularization settings."""
+        if not 0.0 <= self.label_smoothing < 1.0:
+            raise ValueError("regularization.label_smoothing must be in [0.0, 1.0)")
+        if not 0.0 <= self.mix_augmentation_prob <= 1.0:
+            raise ValueError("regularization.mix_augmentation_prob must be in [0.0, 1.0]")
+        if self.mixup_alpha < 0.0:
+            raise ValueError("regularization.mixup_alpha must be non-negative")
+        if self.cutmix_alpha < 0.0:
+            raise ValueError("regularization.cutmix_alpha must be non-negative")
+        if not 0.0 <= self.cutmix_switch_prob <= 1.0:
+            raise ValueError("regularization.cutmix_switch_prob must be in [0.0, 1.0]")
+
+
+@dataclass(slots=True)
+class EMAConfig:
+    """Exponential moving average model tracking."""
+
+    enabled: bool = False
+    decay: float = 0.9999
+
+    def __post_init__(self) -> None:
+        """Validate EMA settings."""
+        if not 0.0 < self.decay < 1.0:
+            raise ValueError("ema.decay must be in the open interval (0.0, 1.0)")
 
 
 @dataclass(slots=True)
@@ -259,16 +305,19 @@ class TrainerConfig:
     """Runtime training configuration."""
 
     seed: int = 0
-    num_epochs: int = 1
+    num_epochs: int | None = None
     max_steps: int | None = None
     log_every_steps: int = 10
     eval_every_steps: int = 100
     checkpoint_every_steps: int = 100
+    early_stopping_patience: int | None = None
     jit: bool = True
 
     def __post_init__(self) -> None:
         """Validate trainer settings."""
-        if self.num_epochs <= 0:
+        if self.num_epochs is None and self.max_steps is None:
+            raise ValueError("at least one of trainer.num_epochs or trainer.max_steps must be set")
+        if self.num_epochs is not None and self.num_epochs <= 0:
             raise ValueError("trainer.num_epochs must be positive")
         if self.max_steps is not None and self.max_steps <= 0:
             raise ValueError("trainer.max_steps must be positive when provided")
@@ -278,6 +327,8 @@ class TrainerConfig:
             raise ValueError("trainer.eval_every_steps must be positive")
         if self.checkpoint_every_steps <= 0:
             raise ValueError("trainer.checkpoint_every_steps must be positive")
+        if self.early_stopping_patience is not None and self.early_stopping_patience <= 0:
+            raise ValueError("trainer.early_stopping_patience must be positive when provided")
 
 
 @dataclass(slots=True)
@@ -329,11 +380,14 @@ class ExperimentConfig:
     name: str
     description: str | None
     tags: list[str]
+    seed: int
     paths: PathsConfig
     loader: DataloaderConfig
     dataset: DatasetConfig
     model: ModelConfig
     optimizer: OptimizerConfig
+    regularization: RegularizationConfig
+    ema: EMAConfig
     trainer: TrainerConfig
     precision: PrecisionConfig
     checkpoint: CheckpointConfig
@@ -346,11 +400,14 @@ class ExperimentConfig:
             "name",
             "description",
             "tags",
+            "seed",
             "paths",
             "loader",
             "dataset",
             "model",
             "optimizer",
+            "regularization",
+            "ema",
             "trainer",
             "precision",
             "checkpoint",
@@ -358,9 +415,13 @@ class ExperimentConfig:
         }
         _expect_keys(data, allowed_keys, context="experiment config")
 
+        seed = int(data.get("seed", 0))
+
         paths = PathsConfig(**data.get("paths", {}))
         loader = DataloaderConfig(**data.get("loader", {}))
-        dataset = DatasetConfig(**data["dataset"])
+        dataset_data = dict(data["dataset"])
+        dataset_seed = int(dataset_data.pop("seed", seed))
+        dataset = DatasetConfig(seed=dataset_seed, **dataset_data)
 
         model_data = data["model"]
         _expect_keys(
@@ -379,7 +440,11 @@ class ExperimentConfig:
         optimizer_data = dict(data.get("optimizer", {}))
         schedule = ScheduleConfig(**optimizer_data.pop("schedule", {}))
         optimizer = OptimizerConfig(schedule=schedule, **optimizer_data)
-        trainer = TrainerConfig(**data.get("trainer", {}))
+        regularization = RegularizationConfig(**data.get("regularization", {}))
+        ema = EMAConfig(**data.get("ema", {}))
+        trainer_data = dict(data.get("trainer", {}))
+        trainer_seed = int(trainer_data.pop("seed", seed))
+        trainer = TrainerConfig(seed=trainer_seed, **trainer_data)
         precision = PrecisionConfig(**data.get("precision", {}))
         checkpoint = CheckpointConfig(**data.get("checkpoint", {}))
         wandb = WandbConfig(**data.get("wandb", {}))
@@ -396,11 +461,14 @@ class ExperimentConfig:
             name=name,
             description=data.get("description"),
             tags=tags,
+            seed=seed,
             paths=paths,
             loader=loader,
             dataset=dataset,
             model=model,
             optimizer=optimizer,
+            regularization=regularization,
+            ema=ema,
             trainer=trainer,
             precision=precision,
             checkpoint=checkpoint,

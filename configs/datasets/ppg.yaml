@@ -1,0 +1,9 @@
+dataset:
+  kind: ppg
+  name: ppg
+  root: processed/PPG/ppg
+  download: false
+  sequence_layout: time_major
+  normalize: false
+  params:
+    include_time: false

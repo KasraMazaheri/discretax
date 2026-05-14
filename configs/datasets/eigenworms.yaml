@@ -1,0 +1,8 @@
+defaults:
+  - ./uea_base
+
+dataset:
+  name: EigenWorms
+trainer:
+  eval_every_steps: 20
+  log_every_steps: 4

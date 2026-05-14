@@ -1,6 +1,6 @@
 model:
   name: linoss
-  hidden_dim: 64
+  hidden_dim: 128
   encoder:
     target: LinearEncoder
     kwargs:
@@ -9,20 +9,20 @@ model:
     target: LinOSS
     kwargs:
       num_blocks: 4
-      state_dim: 64
+      state_dim: 128
       num_heads: 1
       use_head_gating: false
       use_head_output_projection: false
       drop_rate: 0.1
       prenorm: true
       discretization: IMEX
-      initialization: RT
+      initialization: AG
       damping: true
       stability: stable
-      r_min: 0.9
-      theta_max: 1.047 # pi / 3
       A_max: 1.0
-      G_max: 1.0
+      G_max: 0.2
+      projection_eps: 0.001
+      input_normalization: false
   head:
     target: ClassificationHead
     kwargs:

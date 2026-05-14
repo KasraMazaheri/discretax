@@ -1,0 +1,7 @@
+defaults:
+  - ./ltsf_base
+
+dataset:
+  name: Exchange
+trainer:
+  eval_every_steps: 25
