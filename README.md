@@ -235,6 +235,8 @@ This repository has been created and is maintained by:
 - [Philipp Nazari](https://phnazari.github.io)
 - [Francesco Maria Ruscio](https://github.com/francescoshox)
 - [Benedict Armstrong](https://github.com/benedict-armstrong)
+- [Kasra Mazaheri](https://github.com/KasraMazaheri)
+- [Jared Boyer](https://github.com/jaredbmit)
 
 This work has been carried out within the [Computational Applied Mathematics & AI Lab](https://camail.org),
 led by [T. Konstantin Rusch](https://github.com/tk-rusch).
