@@ -136,4 +136,3 @@ def create_tracker(experiment_config: ExperimentConfig, output_dir: Path) -> Tra
                 return WandbTracker(run=run)
 
     raise RuntimeError("unreachable")  # satisfy type checkers
-

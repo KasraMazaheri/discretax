@@ -198,7 +198,7 @@ class LinOSSSequenceMixer(AbstractSequenceMixer):
         self.head_hidden_dim = in_features // num_heads
         self.head_state_dim = state_dim // num_heads
         self.use_head_gating = use_head_gating and num_heads > 1
-        self.use_head_output_projection = use_head_output_projection
+        self.use_head_output_projection = use_head_output_projection and num_heads > 1
 
         # Key generator
         def key_gen(key: PRNGKeyArray):

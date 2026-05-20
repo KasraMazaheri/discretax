@@ -319,7 +319,10 @@ def _load_uea_preprocessed_splits(
     train_targets_path = dataset_root / "y_train.pkl"
     test_inputs_path = dataset_root / "X_test.pkl"
     test_targets_path = dataset_root / "y_test.pkl"
-    if all(path.exists() for path in (train_inputs_path, train_targets_path, test_inputs_path, test_targets_path)):
+    if all(
+        path.exists()
+        for path in (train_inputs_path, train_targets_path, test_inputs_path, test_targets_path)
+    ):
         train_inputs = _load_pickle(train_inputs_path).astype(np.float32)
         train_targets = _labels_to_int(_load_pickle(train_targets_path))
         test_inputs = _load_pickle(test_inputs_path).astype(np.float32)

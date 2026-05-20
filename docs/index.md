@@ -36,7 +36,6 @@ For NVIDIA GPU training, install both the training and CUDA extras:
 
 ```bash
 uv sync --extra train --extra cu12
-uv run python scripts/env/check_jax_backend.py --require-gpu
 ```
 
 ## Installation

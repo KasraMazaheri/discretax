@@ -14,7 +14,6 @@ import argparse
 import collections
 import itertools
 import json
-import os
 import re
 import shlex
 import subprocess
@@ -240,9 +239,17 @@ def _build_jobs(sweep_config: dict[str, Any]) -> list[dict[str, Any]]:
         if job_grid_order not in {"inner", "outer"}:
             raise ValueError("job_grid_order must be either 'inner' or 'outer'")
         outer_iter = (
-            ((job_overrides, grid_values) for grid_values in job_grid_product for job_overrides in explicit_jobs)
+            (
+                (job_overrides, grid_values)
+                for grid_values in job_grid_product
+                for job_overrides in explicit_jobs
+            )
             if job_grid_order == "outer"
-            else ((job_overrides, grid_values) for job_overrides in explicit_jobs for grid_values in job_grid_product)
+            else (
+                (job_overrides, grid_values)
+                for job_overrides in explicit_jobs
+                for grid_values in job_grid_product
+            )
         )
         for job_overrides, grid_values in outer_iter:
             overrides = dict(fixed)
@@ -313,7 +320,7 @@ def _gpu_process_counts(gpu_uuids: dict[str, str]) -> dict[str, int]:
     This counts all compute processes visible to nvidia-smi, not only jobs launched
     by this scheduler. That is desirable for admission control.
     """
-    counts = {gpu: 0 for gpu in gpu_uuids}
+    counts = dict.fromkeys(gpu_uuids, 0)
 
     result = subprocess.run(
         [
@@ -428,7 +435,9 @@ def _available_slots(
     return available
 
 
-def _pick_next_gpu(gpus: list[str], available: dict[str, int], start_index: int) -> tuple[str | None, int]:
+def _pick_next_gpu(
+    gpus: list[str], available: dict[str, int], start_index: int
+) -> tuple[str | None, int]:
     for offset in range(len(gpus)):
         idx = (start_index + offset) % len(gpus)
         gpu = gpus[idx]
@@ -437,7 +446,8 @@ def _pick_next_gpu(gpus: list[str], available: dict[str, int], start_index: int)
     return None, start_index
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901
+    """Run the sweep scheduler."""
     args = _parse_args()
     log_dir = Path(args.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -463,7 +473,10 @@ def main() -> int:
     sweep_name = args.launch_name or sweep_config_path.stem
     total_capacity = len(gpus) * args.slots_per_gpu
     print(f"Loaded {len(jobs)} jobs from {sweep_config_path}")
-    print(f"Scheduler capacity: {len(gpus)} GPUs x {args.slots_per_gpu} slots = {total_capacity} active tmux jobs")
+    print(
+        f"Scheduler capacity: {len(gpus)} GPUs x {args.slots_per_gpu} slots = "
+        f"{total_capacity} active tmux jobs"
+    )
 
     if args.dry_run:
         for index, overrides in enumerate(jobs):
@@ -555,7 +568,8 @@ def main() -> int:
             print("Active tmux sessions:", file=sys.stderr)
             for session_name, meta in active.items():
                 print(
-                    f"  {session_name}: gpu={meta['gpu']} job={meta['job_name']} log={meta['log_path']}",
+                    f"  {session_name}: gpu={meta['gpu']} job={meta['job_name']} "
+                    f"log={meta['log_path']}",
                     file=sys.stderr,
                 )
         return 130

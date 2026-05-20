@@ -1,0 +1,21 @@
+defaults:
+  - ../base
+  - ../datasets/mnist
+  - ../models/linoss
+
+name: mnist-linoss-smoke
+description: Short LinOSS smoke run on MNIST row sequences.
+tags:
+  - smoke
+  - linoss
+  - mnist
+loader:
+  batch_size: 32
+  eval_batch_size: 64
+trainer:
+  max_steps: 8
+  log_every_steps: 1
+  eval_every_steps: 4
+  checkpoint_every_steps: 8
+wandb:
+  enabled: false

@@ -349,9 +349,7 @@ def print_failed_runs(df: pd.DataFrame, metric_key: str) -> None:
             df_hashable[col] = df_hashable[col].apply(
                 lambda v: str(v) if isinstance(v, (list, dict)) else v
             )
-    varying = _varying_columns(
-        df_hashable, _config_columns(df_hashable, aggregate_seeds=False)
-    )
+    varying = _varying_columns(df_hashable, _config_columns(df_hashable, aggregate_seeds=False))
     for _, row in failed.sort_values("job_id").iterrows():
         hp_str = "  ".join(f"{col}={row[col]}" for col in varying if col in row)
         raw_loss = row.get("test_loss")
@@ -471,9 +469,7 @@ def analyze_parameter_impact(
         print()
 
 
-def print_efficiency_comparison(
-    grouped_df: pd.DataFrame, aggregate_seeds: bool = True
-) -> None:
+def print_efficiency_comparison(grouped_df: pd.DataFrame, aggregate_seeds: bool = True) -> None:
     """Print parameter count and throughput side-by-side, sorted by param count."""
     has_params = (
         "mean_parameter_count" in grouped_df.columns

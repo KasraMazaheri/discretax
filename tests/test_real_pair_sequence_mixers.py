@@ -168,9 +168,11 @@ def test_linoss_sequence_mixer_matches_reference(discretization: str, damping: b
 def test_linoss_real_pair_supports_low_precision(dtype):
     """LinOSS paired-real path can be cast to low precision and still execute."""
     linoss = jax.tree.map(
-        lambda leaf: leaf.astype(dtype)
-        if isinstance(leaf, jax.Array) and jnp.issubdtype(leaf.dtype, jnp.floating)
-        else leaf,
+        lambda leaf: (
+            leaf.astype(dtype)
+            if isinstance(leaf, jax.Array) and jnp.issubdtype(leaf.dtype, jnp.floating)
+            else leaf
+        ),
         LinOSSSequenceMixer(in_features=4, state_dim=6, key=jr.PRNGKey(6)),
     )
     x = jr.normal(jr.PRNGKey(7), (5, 4)).astype(dtype)

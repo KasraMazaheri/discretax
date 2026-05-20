@@ -4,7 +4,7 @@
 # =============================
 
 # Declare all targets as phony (not actual files)
-.PHONY: help clean format git-sync test-full install install-dev install-train install-data install-train-cuda install-cuda install-examples install-docs install-all clean-env remake-lockfile check-jax-backend download-uea process-uea
+.PHONY: help clean format git-sync test-full install install-dev install-train install-data install-train-cuda install-cuda install-examples install-docs install-all clean-env remake-lockfile download-uea process-uea
 
 # Default target - show help when just running 'make'
 .DEFAULT_GOAL := help
@@ -47,9 +47,6 @@ install-train-cuda: ## Install training dependencies with CUDA-enabled JAX
 
 install-cuda: ## Install dependencies with CUDA support
 	uv sync --extra cu12
-
-check-jax-backend: ## Print the active JAX backend and visible devices
-	uv run python scripts/env/check_jax_backend.py
 
 download-uea: ## Download the raw UEA archive into data/raw/UEA
 	uv run python scripts/datasets/download_uea.py

@@ -112,12 +112,6 @@ For NVIDIA GPU training, install the training stack together with CUDA-enabled J
 uv sync --extra train --extra cu12
 ```
 
-Then verify that JAX sees the GPU:
-
-```bash
-uv run python scripts/env/check_jax_backend.py --require-gpu
-```
-
 After installing the development dependencies (activate your environment if needed), enable the git hooks:
 
 ```bash
@@ -136,7 +130,6 @@ The repository now includes a packaged training stack with:
 
 Helper scripts now live under `scripts/`:
 
-- `scripts/env/` for environment and runtime checks
 - `scripts/datasets/` for dataset download and preprocessing utilities
 
 Print a fully resolved config:

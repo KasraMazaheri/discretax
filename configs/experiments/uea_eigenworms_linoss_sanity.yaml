@@ -1,0 +1,22 @@
+defaults:
+  - ../base
+  - ../datasets/eigenworms
+  - ../models/linoss
+
+name: uea-eigenworms-linoss-sanity
+description: Short LinOSS sanity run on preprocessed UEA EigenWorms splits.
+tags:
+  - sanity
+  - linoss
+  - uea
+  - eigenworms
+loader:
+  batch_size: 16
+  eval_batch_size: 32
+trainer:
+  max_steps: 32
+  log_every_steps: 4
+  eval_every_steps: 16
+  checkpoint_every_steps: 32
+wandb:
+  enabled: false
